@@ -96,6 +96,40 @@ export async function request<T>(
   return (await res.json()) as T
 }
 
+export async function uploadFile<T>(
+  path: string,
+  formData: FormData
+): Promise<T> {
+  const url = path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  })
+
+  if (res.status === 401) {
+    throw new ApiError(401, 'Sesión expirada')
+  }
+
+  if (!res.ok) {
+    let detail: unknown
+    try {
+      detail = await res.json()
+    } catch {
+      detail = null
+    }
+    const message =
+      (detail as { detail?: string })?.detail ?? `Error ${res.status}`
+    throw new ApiError(res.status, message, detail)
+  }
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+
+  return (await res.json()) as T
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),

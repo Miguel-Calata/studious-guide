@@ -8,6 +8,16 @@ Jobs are registered in the `functions` list.
 from arq.connections import RedisSettings
 
 from app.config import settings
+from app.models import (  # noqa: F401  (ensure all mappers configure)
+    Base,
+    CompendiumSection,
+    Extraction,
+    NotionConfig,
+    Project,
+    PromptTemplate,
+    SourceDocument,
+    User,
+)
 from app.workers.extraction_worker import audit_extraction, extract_document
 from app.workers.generation_worker import generate_section
 

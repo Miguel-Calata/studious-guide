@@ -26,7 +26,8 @@ ProyectoJorge/
 │   ├── 08_prompt_engine.md
 │   ├── 09_pipeline_ia.md
 │   ├── 10_deployment.md
-│   └── 11_changelog.md
+│   ├── 11_changelog.md
+│   └── 12_roadmap_sprints.md
 │
 ├── memory/                  ← Documentación original del Dr. Jorge (referencia)
 │   ├── NUEVO - IA -.md      ← Especificación completa del sistema SAM
@@ -34,7 +35,7 @@ ProyectoJorge/
 │
 ├── backend/                 ← API y lógica de negocio (FastAPI + Python)
 ├── frontend/                ← Interfaz web (React + TypeScript)
-├── docker/                  ← Configuración de despliegue
+├── docker/                  ← Configuración de despliegue (compose, Dockerfiles, nginx)
 └── .gitignore
 ```
 
@@ -43,7 +44,7 @@ ProyectoJorge/
 | Capa | Tecnología |
 |------|-----------|
 | Backend | FastAPI (Python 3.12), SQLAlchemy 2.0, ARQ + Redis |
-| Frontend | React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui, marked.js |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui, marked.js (servido por nginx en contenedor) |
 | Base de datos | PostgreSQL 16 |
 | Cache/Queue | Redis 7 |
 | AI Gateway | OpenRouter API (Gemini 2.5 Pro, Claude 3.5 Sonnet, +200 modelos) |
@@ -78,7 +79,17 @@ docker compose up --build
 
 # API disponible en http://localhost:8000
 # Swagger UI en http://localhost:8000/docs
+# Frontend (build estático en nginx) en http://localhost:5173  ← proxy /api/v1 al backend
 ```
+
+> ⚠️ **Tras cambiar código en `backend/`**, reconstuye siempre la imagen:
+> `docker compose up --build backend worker`. Si no, el contenedor seguirá
+> corriendo el binario anterior (ver incidente "Not authenticated" en `docs/11_changelog.md`).
+
+> **Nota de producción:** el servicio `frontend` construye la SPA y la sirve con nginx,
+> haciendo proxy de `/api/v1` al backend en la misma red Docker. Esto evita problemas de
+> CORS y permite cookies httpOnly de auth bajo el mismo origen. En Coolify basta con apuntar
+> el proyecto al directorio `docker/` y exponer el puerto del frontend.
 
 ### Opción B: Desarrollo Local (sin Docker)
 

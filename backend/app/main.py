@@ -45,6 +45,7 @@ def create_app() -> FastAPI:
         title="SAM Platform API",
         version="0.1.0",
         lifespan=lifespan,
+        redirect_slashes=False,
     )
 
     origins = [

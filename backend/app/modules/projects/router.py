@@ -21,7 +21,7 @@ from app.modules.projects.service import (
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
-@router.post("/", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create(
     data: ProjectCreate,
     current_user: User = Depends(get_current_user),
@@ -30,7 +30,7 @@ async def create(
     return await create_project(db, current_user.id, data)
 
 
-@router.get("/", response_model=list[ProjectResponse])
+@router.get("", response_model=list[ProjectResponse])
 async def list_all(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

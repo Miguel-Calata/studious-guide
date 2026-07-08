@@ -4,6 +4,148 @@ Registro cronológico de decisiones arquitectónicas, cambios de diseño y desvi
 
 ---
 
+## 2026-07-08 — Sprint 10: Pipeline UI (frontend)
+
+### Alcance
+Conexión completa del pipeline backend (extracciones, merge, generación, secciones) en la UI de detalle de proyecto. Sin cambios en el backend (todos los endpoints ya existían).
+
+### Nuevas dependencias (frontend)
+- `sonner@^2.0.7` → toasts de feedback (errores 409 y confirmaciones async).
+- `@uiw/react-md-editor@^4.0.7` → editor Markdown del panel de revisión de secciones (import diferido vía `React.lazy`).
+
+### Componentes nuevos
+- `pages/ProjectDetailPage.tsx` (refactor): usa `useProjectPolling` para refrescar proyecto y documentos con `refreshInterval` condicional (3s solo en `extracting`/`generating`).
+- `components/pipeline/ExtractionCard.tsx`: "Extraer todo" + "Reintentar fallidos" + barra de progreso de documentos.
+- `components/pipeline/CompendiumCard.tsx`: "Fusionar extracciones" + "Generar compendio" + progreso "N/11" + lista de secciones.
+- `components/pipeline/ProgressBar.tsx`: barra reutilizable.
+- `components/sections/SectionList.tsx` + `SectionEditor.tsx`: lista de 11 secciones y editor Markdown (PUT `/sections/{id}`, regenerate POST `/sections/{id}/regenerate`).
+- `hooks/useProjectPolling.ts`: polling condicional.
+- `lib/pipeline.ts`: mapeos de estado→label/variant (extracción, documento, sección) y helpers de polling.
+- `lib/notify.ts`: `notifyError`/`notifySuccess` (sonner) que extraen el `detail` del backend.
+- `types/extraction.ts`, `types/compendium.ts`, `api/extractions.ts`, `api/compendiums.ts`.
+
+### Decisiones
+- **F-13**: editor `@uiw/react-md-editor` con import diferido (no infla el bundle del panel).
+- **F-14**: actualización async vía `useSWR` `refreshInterval` condicional (no SSE/WebSockets).
+- **F-15**: merge y generate como dos acciones explícitas separadas, respetando la máquina de estados.
+- **F-16**: feedback con `sonner`, mapeando el `detail` de los 409 del backend a toasts legibles en español.
+
+### Notas
+- Los botones respetan la máquina de estados del backend: "Extraer todo" habilitado solo en `draft`/`extracting`; "Generar compendio" solo con `merged_content` y en `draft`/`review`.
+- "Reintentar fallidos" reusa `extract-all` (el backend re-encola docs en estado `error`).
+- Tests Vitest: 39 en total (incluye `pipeline`, `api/extractions`, `api/compendiums`, `SectionList`, `ProjectDetailPage`, `useProjectPolling`). `tsc -b` y `oxlint` limpios.
+
+---
+
+## 2026-07-08 — Incidente: "Not authenticated" al iniciar sesión (Docker)
+
+### Síntoma
+Al iniciar sesión en el frontend aparecía siempre "Not authenticated" y `GET /auth/me` devolvía 401.
+
+### Causa raíz
+**No fue un bug de código.** El contenedor `docker-backend` estaba corriendo con una imagen construida ~2 horas antes, correspondiente a una versión del backend **anterior al Sprint 8** (antes de implementar cookies httpOnly, `/auth/logout` y `/auth/refresh`). El endpoint `/auth/login` de esa imagen vieja respondía 200 pero **sin `Set-Cookie`**, por lo que el navegador nunca guardaba la sesión. Confirmado con `docker exec ... cat /app/app/modules/auth/router.py` (solo tenía `def login`).
+
+### Resolución
+- `docker compose build backend worker` + `up -d backend worker` para reconstruir con el código actual.
+- Verificado: `POST /auth/login` ahora devuelve `Set-Cookie: access_token=...; HttpOnly; SameSite=lax` y `refresh_token=...; HttpOnly`. `GET /auth/me` con esas cookies → 200. Flujo validado también a través del proxy nginx del servicio `frontend` (puerto 5173).
+
+### Lección / nota operativa
+> Tras cualquier cambio en `backend/`, reconstruir la imagen (`docker compose up --build` o `build backend worker`). El `docker ps` mostraba el contenedor "Up 2 hours" pero con binario viejo. Ver `README.md` (Inicio Rápido, Opción A).
+
+### UX de registro
+- Se mantuvo el **autologin** tras registro (register → login → cookie → navega a `/`), que es el flujo más ágil para el usuario. No se requirieron cambios de código en frontend; el fallo previo era exclusivamente la imagen de backend desactualizada.
+
+---
+
+## 2026-07-08 — Fix: "No se pudieron cargar los proyectos" / "No se pudo crear el proyecto"
+
+### Síntoma
+Tras login correcto, el dashboard mostraba "No se pudieron cargar los proyectos. Intenta de nuevo." y el modal "Nuevo proyecto" mostraba "No se pudo crear el proyecto".
+
+### Causa raíz
+Doble problema en el flujo `/api/v1/projects` (ruta de colección):
+1. **FastAPI `redirect_slashes=True`** (default) redirigía `GET /projects` → `GET /projects/` (307). El frontend siempre llama sin slash (claves SWR `/projects`).
+2. **nginx del frontend** usaba `proxy_set_header Host $host;` — `$host` descarta el puerto, así que el `Location` del 307 salía como `http://localhost/api/v1/projects/` (sin `:5173`). El navegador intentaba esa URL en puerto 80 → error de red/CORS → SWR `onError`. Lo mismo rompía el `POST /projects` (307 en medio del alta).
+
+### Resolución
+- `backend/app/main.py`: `FastAPI(..., redirect_slashes=False)`.
+- `backend/app/modules/projects/router.py`: rutas de colección `@router.get("/")` / `@router.post("/")` → `""` (ruta `/projects` exacta, sin slash).
+- `docker/nginx.frontend.conf`: `proxy_set_header Host $http_host;` (preserva el puerto en cualquier redirect residual).
+- Rebuild de `backend`, `worker` y `frontend`.
+
+### Verificación
+- `GET /api/v1/projects` (nginx, sin slash) → **200** (sin 307).
+- `POST /api/v1/projects` (nginx) → **201**.
+- `GET /api/v1/projects/{id}/documents` (nginx) → **200**.
+- Login → dashboard carga proyectos; "Nuevo proyecto" crea y aparece en la lista.
+
+> Nota: el router `documents` no usaba paths raíz (`/`), así que no requirió cambio. Los demás routers (extractions, compendiums, etc.) se ajustarán al construir su UI; con `redirect_slashes=False` basta llamarlos con la ruta exacta que defina cada endpoint.
+
+---
+
+## 2026-07-08 — Sprint 9: Dashboard de proyectos
+
+### Decisiones
+
+| # | Decisión | Justificación | Alternativas |
+|---|----------|---------------|-------------|
+| F-7 | **Tipo de documento implícito** | El usuario no elige tipo; se infiere del nombre del archivo y se sube agrupado por tipo. Reduce fricción | Selector manual de tipo (el backend lo requería antes, ahora es opcional) |
+| F-8 | **Crear proyecto en modal** | Acceso rápido desde el dashboard sin navegación extra | Página separada `/projects/new` |
+| F-9 | **Drag & drop + botón** | Cubre usuarios que arrastran y los que prefieren el file picker | Solo botón (menos ergonómico) |
+| F-10 | **Badges de estado con color, sin barra de progreso** | Información suficiente para el MVP del dashboard | Barra de progreso del pipeline (Sprint 10+) |
+| F-11 | **UI en español** | La plataforma está orientada al mercado hispanohablante (Dr. Jorge) | Inglés (inconsistente con el resto de la app) |
+
+### Implementado
+
+- [x] Tipos `Project`, `ProjectCreateRequest`, `SourceDocument`, `DocumentType`.
+- [x] Schemas: `projectCreateSchema` (zod).
+- [x] API: `api/projects.ts` (getProjects, getProject, createProject, archiveProject), `api/documents.ts` (getDocuments, uploadDocuments, deleteDocument).
+- [x] `api/client.ts`: helper `uploadFile()` para multipart con cookies.
+- [x] Componentes UI shadcn: `dialog`, `badge` (variantes por estado), `table`, `skeleton`, `textarea`, `separator`, `dropdown-menu`.
+- [x] `lib/projects.ts`: `statusLabel`, `statusVariant`, `documentTypeLabel`, `inferDocumentType`.
+- [x] `components/projects/`: `ProjectList`, `ProjectCard`, `CreateProjectDialog`.
+- [x] `components/documents/`: `DocumentUploader` (react-dropzone), `DocumentList`.
+- [x] `pages/DashboardPage.tsx` reescrito; nuevo `pages/ProjectDetailPage.tsx`.
+- [x] `routes/AppRouter.tsx`: ruta `/projects/:id`.
+- [x] Dependencias: `react-dropzone`, `@radix-ui/react-dialog`, `@radix-ui/react-dropdown-menu`, `@radix-ui/react-separator`.
+- [x] Tests (Vitest): `projects.test.ts` (lib), `projects.ui.test.tsx`, `documents.test.tsx` (16 tests total, todos pasando).
+
+### Archivos nuevos
+
+- `frontend/src/types/project.ts`, `frontend/src/types/document.ts`
+- `frontend/src/schemas/project.ts`
+- `frontend/src/api/projects.ts`, `frontend/src/api/documents.ts`
+- `frontend/src/lib/projects.ts`
+- `frontend/src/components/ui/{dialog,badge,table,skeleton,textarea,separator,dropdown-menu}.tsx`
+- `frontend/src/components/projects/{ProjectList,ProjectCard,CreateProjectDialog}.tsx`
+- `frontend/src/components/documents/{DocumentUploader,DocumentList}.tsx`
+- `frontend/src/pages/ProjectDetailPage.tsx`
+- `frontend/src/test/{projects.test.ts,projects.ui.test.tsx,documents.test.tsx}`
+
+### Archivos modificados
+
+- `frontend/src/api/client.ts` — +`uploadFile`
+- `frontend/src/pages/DashboardPage.tsx` — reescrito con SWR + modal
+- `frontend/src/routes/AppRouter.tsx` — +ruta `/projects/:id`
+- `frontend/package.json` — +dependencias
+- `docs/12_roadmap_sprints.md` — Sprint 9 completado + backlog archivar proyecto
+
+### Backlog documentado
+
+- **Archivar/eliminar proyectos desde UI** → Sprint 12. El endpoint backend ya existe.
+
+### Infraestructura (Docker / Coolify)
+
+- [x] **Servicio `frontend` en `docker-compose.yml`** que construye la SPA (multi-stage: `npm ci` + `npm run build`) y la sirve con nginx.
+- [x] `docker/Dockerfile.frontend` (context raíz, build en `frontend/`, nginx final).
+- [x] `docker/nginx.frontend.conf`: proxy de `/api/v1` → `backend:8000` (mismo origen, cookies httpOnly sin CORS) + SPA fallback a `index.html`.
+- [x] Variable `FRONTEND_PORT` (default 5173) en `.env.docker.example`.
+- [x] Verificado: `GET /` → 200, `GET /api/v1/health` → healthy, `GET /projects/x` → 200 (SPA fallback).
+
+> **Decisión F-12:** El frontend se despliega como build estático en nginx dentro del compose, no con el dev server de Vite. Esto es requisito para Coolify (un solo `docker-compose` up levanta todo). El proxy de nginx al backend elimina la dependencia de CORS en producción.
+
+---
+
 ## 2026-07-08 — Sprint 8: Frontend Scaffold
 
 ### Decisiones

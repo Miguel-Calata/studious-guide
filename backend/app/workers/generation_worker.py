@@ -1,3 +1,4 @@
+import asyncio
 import structlog
 from contextlib import asynccontextmanager
 
@@ -35,38 +36,42 @@ async def _get_session(db: AsyncSession | None):
 async def _check_all_sections_done(
     db: AsyncSession, project_id: str
 ) -> None:
-    result = await db.execute(
-        select(CompendiumSection).where(
-            CompendiumSection.project_id == project_id
-        )
-    )
-    all_sections = list(result.scalars().all())
+    for _ in range(10):
+        async with async_session() as check_db:
+            result = await check_db.execute(
+                select(CompendiumSection).where(
+                    CompendiumSection.project_id == project_id
+                )
+            )
+            all_sections = list(result.scalars().all())
 
-    if len(all_sections) < 11:
-        return
+            if len(all_sections) < 11:
+                return
 
-    all_done = all(
-        s.status in (SectionStatus.COMPLETED, SectionStatus.FAILED)
-        for s in all_sections
-    )
+            all_done = all(
+                s.status in (SectionStatus.COMPLETED, SectionStatus.FAILED)
+                for s in all_sections
+            )
 
-    if not all_done:
-        return
+            if not all_done:
+                await asyncio.sleep(1)
+                continue
 
-    project_result = await db.execute(
-        select(Project).where(Project.id == project_id)
-    )
-    project = project_result.scalar_one_or_none()
-    if project is None:
-        return
+            project_result = await check_db.execute(
+                select(Project).where(Project.id == project_id)
+            )
+            project = project_result.scalar_one_or_none()
+            if project is None:
+                return
 
-    if project.status == ProjectStatus.GENERATING:
-        project.set_status(ProjectStatus.REVIEW)
-        await db.commit()
-        log.info(
-            "project_transitioned_to_review",
-            project_id=str(project.id),
-        )
+            if project.status == ProjectStatus.GENERATING:
+                project.set_status(ProjectStatus.REVIEW)
+                await check_db.commit()
+                log.info(
+                    "project_transitioned_to_review",
+                    project_id=str(project.id),
+                )
+            return
 
 
 async def generate_section(

@@ -230,17 +230,37 @@ Documento maestro de planificación. Cada sprint tiene objetivo, tareas, tests d
 
 > **Decisión F-1:** Auth vía cookies httpOnly desde el inicio (no localStorage) para mitigar robo de token por XSS. El dominio de cookie es configurable (`COOKIE_DOMAIN`) para compartir entre subdominios (`.astreo.space`). `secure` y `samesite` configurables para prod. Logout solo limpia cookies (sin denylist de refresh token en backend; ver nota de seguridad en changelog).
 
-### Sprint 9: Dashboard de proyectos
-- Login screen.
-- Lista de proyectos.
-- Crear proyecto.
-- Subir PDFs.
+### Sprint 9: Dashboard de proyectos ✅
+- [x] **Lista de proyectos** con tarjetas (nombre, descripción, estado, fecha) y empty state.
+- [x] **Crear proyecto** desde modal en el dashboard (nombre requerido, descripción opcional).
+- [x] **Detalle de proyecto** (`/projects/:id`): cabecera con estado y documentos asociados.
+- [x] **Subir PDFs** por drag & drop y por botón (hasta 15 archivos, 50MB c/u).
+- [x] **Tipo de documento implícito**: se infiere del nombre del archivo (BMJ / guía / artículo) y se agrupa la subida por tipo. El usuario no elige tipo manualmente.
+- [x] **Eliminar documento** con diálogo de confirmación.
+- [x] UI en español (estados y tipos traducidos, badges con color por estado).
+- [x] Tests frontend (Vitest): inferencia de tipos, ProjectCard, CreateProjectDialog, DocumentUploader, DocumentList.
+- [x] **Servicio `frontend` en Docker** (build estático + nginx) para despliegue en Coolify. Proxy `/api/v1` → backend. Ver `docker/Dockerfile.frontend` y `docker/nginx.frontend.conf`.
 
-### Sprint 10: Pipeline UI
-- Botón "Extraer todo".
-- Ver estado de extracciones.
-- Botón "Generar compendio".
-- Editor Markdown para revisar secciones.
+> **Decisión F-7:** El tipo de documento es implícito. `inferDocumentType(filename)` en `frontend/src/lib/projects.ts` clasifica por heurística de nombre; la subida agrupa archivos por tipo y hace una request por grupo. El backend defaulta a `article` si no se envía tipo.
+
+> **Backlog (pospuesto):** Archivar/eliminar proyectos desde la UI → asignado al **Sprint 12 (Roles y permisos)**. El endpoint `DELETE /projects/{id}` ya existe en backend; falta UI (botón en dashboard/detalle con confirmación y revalidación de la lista).
+
+### Sprint 10: Pipeline UI ✅
+- [x] **Tipos y clientes API**: `types/extraction.ts`, `types/compendium.ts`, `api/extractions.ts` (`extractAllForProject`, `getExtraction`, `getExtractionStatus`, `retryExtraction`), `api/compendiums.ts` (`mergeProject`, `generateProject`, `getSections`, `getSection`, `updateSection`, `regenerateSection`). Paths sin slash final (ver fix redirects del 2026-07-08).
+- [x] `lib/pipeline.ts`: mapeos `status→label/variant` para extracción, documento y sección; `dosificationLabel`; `isProjectBusy` y `POLL_INTERVAL_MS`.
+- [x] `lib/notify.ts` + **sonner**: `Toaster` montado en `App.tsx`; `notifyError`/`notifySuccess` extraen el `detail` del backend (incl. 409).
+- [x] `hooks/useProjectPolling.ts`: `useSWR` con `refreshInterval` condicional (solo en estados `extracting`/`generating`, 3s; 0 en idle).
+- [x] `ProjectDetailPage` refactorizado: polling del proyecto y de documentos con `refreshInterval` condicional.
+- [x] Columna "Estado" en `DocumentList` (subido/extrayendo/extraído/error).
+- [x] `ExtractionCard`: botón **"Extraer todo"** (POST `/projects/{id}/extract-all`), botón **"Reintentar fallidos"**, barra de progreso "N/M documentos extraídos".
+- [x] `CompendiumCard`: botones **"Fusionar extracciones"** (POST `/merge`) y **"Generar compendio"** (POST `/generate`), habilitados según máquina de estados y `merged_content`; barra "N/11 secciones" con polling de `/sections` durante `generating`.
+- [x] `SectionList` + `SectionEditor` (modal con **@uiw/react-md-editor**, preview live): editar/save (PUT `/sections/{id}`) y regenerar (POST `/sections/{id}/regenerate`, solo en `completed|failed|approved`).
+- [x] Tests Vitest (39 en total): `lib/pipeline`, `api/extractions`, `api/compendiums`, `SectionList`, `ProjectDetailPage` (botones habilitados/deshabilitados por estado, click → endpoint + toast), `useProjectPolling` (polling activo en busy, detenido en idle).
+
+> **Decisión F-13:** Editor Markdown = `@uiw/react-md-editor` (WYSIWYG + preview live), importado de forma diferida (`React.lazy`) para no inflar el bundle del panel.
+> **Decisión F-14:** Actualización de estado async vía `useSWR` `refreshInterval` condicional (3s solo en `extracting`/`generating`), no SSE/WebSockets.
+> **Decisión F-15:** Flujo merge→generate como dos acciones explícitas separadas, respetando la máquina de estados del backend.
+> **Decisión F-16:** Feedback de errores/éxito con **sonner** (toasts), mapeando el `detail` de los 409 del backend.
 
 ### Sprint 11: Public viewer + publish
 - Pantalla de publicar.

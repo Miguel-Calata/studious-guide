@@ -4,6 +4,7 @@ import { ProtectedRoute } from './ProtectedRoute'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 
 export function AppRouter() {
   return (
@@ -18,6 +19,7 @@ export function AppRouter() {
         }
       >
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/projects/:id" element={<ProjectDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

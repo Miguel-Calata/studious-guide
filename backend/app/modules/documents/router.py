@@ -46,7 +46,7 @@ async def upload(
 @router.get(
     "/projects/{project_id}/documents",
     response_model=list[DocumentResponse],
-)
+) 
 async def list_all(
     project: Project = Depends(get_project_for_documents),
     db: AsyncSession = Depends(get_db),
