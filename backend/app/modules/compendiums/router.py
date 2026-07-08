@@ -1,0 +1,103 @@
+from arq.connections import ArqRedis
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.dependencies import get_arq_pool
+from app.models.compendium_section import CompendiumSection
+from app.models.project import Project
+from app.models.user import User
+from app.modules.auth.dependencies import get_current_user
+from app.modules.compendiums.dependencies import (
+    get_project_for_compendium,
+    get_section_or_404,
+)
+from app.modules.compendiums.schemas import (
+    GenerateResponse,
+    MergeResponse,
+    SectionResponse,
+    SectionUpdate,
+)
+from app.modules.compendiums.service import (
+    generate_sections,
+    get_sections_for_project,
+    merge_extractions,
+    regenerate_section,
+    update_section,
+)
+
+router = APIRouter(tags=["Compendiums"])
+
+
+@router.post(
+    "/projects/{project_id}/merge",
+    response_model=MergeResponse,
+)
+async def merge(
+    project: Project = Depends(get_project_for_compendium),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await merge_extractions(db, project)
+    return {
+        "project_id": str(result.id),
+        "merged_char_count": len(result.merged_content or ""),
+        "extraction_count": result.merged_content.count("\n\n") + 1 if result.merged_content else 0,
+        "project_status": result.status,
+    }
+
+
+@router.post(
+    "/projects/{project_id}/generate",
+    response_model=GenerateResponse,
+)
+async def generate(
+    project: Project = Depends(get_project_for_compendium),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis | None = Depends(get_arq_pool),
+) -> dict:
+    return await generate_sections(db, project, arq_pool)
+
+
+@router.get(
+    "/projects/{project_id}/sections",
+    response_model=list[SectionResponse],
+)
+async def list_sections(
+    project: Project = Depends(get_project_for_compendium),
+    db: AsyncSession = Depends(get_db),
+) -> list[CompendiumSection]:
+    return await get_sections_for_project(db, str(project.id))
+
+
+@router.get(
+    "/sections/{section_id}",
+    response_model=SectionResponse,
+)
+async def get_one(
+    section: CompendiumSection = Depends(get_section_or_404),
+) -> CompendiumSection:
+    return section
+
+
+@router.put(
+    "/sections/{section_id}",
+    response_model=SectionResponse,
+)
+async def update_one(
+    body: SectionUpdate,
+    section: CompendiumSection = Depends(get_section_or_404),
+    db: AsyncSession = Depends(get_db),
+) -> CompendiumSection:
+    return await update_section(db, section, body.content)
+
+
+@router.post(
+    "/sections/{section_id}/regenerate",
+    response_model=SectionResponse,
+)
+async def regenerate_one(
+    section: CompendiumSection = Depends(get_section_or_404),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis | None = Depends(get_arq_pool),
+) -> CompendiumSection:
+    return await regenerate_section(db, section, arq_pool)
