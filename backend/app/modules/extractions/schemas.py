@@ -1,7 +1,14 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ExtractRequest(BaseModel):
+    extraction_model: str | None = Field(
+        default=None,
+        description="OpenRouter model ID. None = default.",
+    )
 
 
 class ExtractionResponse(BaseModel):
@@ -41,5 +48,6 @@ class ExtractAllResponse(BaseModel):
     project_id: str
     total_documents: int
     enqueued: int
+    retried: int
     skipped: int
     project_status: str

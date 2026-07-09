@@ -32,3 +32,6 @@ class WorkerSettings:
 
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     functions = [health_check_task, extract_document, audit_extraction, generate_section]
+    max_jobs = 10
+    job_timeout = 1800
+    max_tries = 2

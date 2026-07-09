@@ -18,6 +18,7 @@ from app.modules.extractions.dependencies import (
 )
 from app.modules.extractions.schemas import (
     ExtractAllResponse,
+    ExtractRequest,
     ExtractionResponse,
     ExtractionStatusResponse,
     RetryResponse,
@@ -39,17 +40,20 @@ router = APIRouter(tags=["Extractions"])
     status_code=status.HTTP_201_CREATED,
 )
 async def extract(
+    body: ExtractRequest | None = None,
     document: SourceDocument = Depends(get_document_for_extract),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis | None = Depends(get_arq_pool),
 ) -> Extraction:
     extraction = await start_extraction(db, document)
     if arq_pool is not None:
-        await arq_pool.enqueue_job(
-            "extract_document",
-            document_id=str(document.id),
-            _job_id=f"extract_{document.id}",
-        )
+        job_kwargs: dict = {
+            "document_id": str(document.id),
+            "_job_id": f"extract_{document.id}",
+        }
+        if body and body.extraction_model:
+            job_kwargs["model"] = body.extraction_model
+        await arq_pool.enqueue_job("extract_document", **job_kwargs)
     return extraction
 
 
@@ -78,17 +82,20 @@ async def get_status(
     response_model=RetryResponse,
 )
 async def retry(
+    body: ExtractRequest | None = None,
     extraction: Extraction = Depends(get_extraction_or_404),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis | None = Depends(get_arq_pool),
 ) -> dict:
     result = await retry_extraction(db, extraction)
     if arq_pool is not None:
-        await arq_pool.enqueue_job(
-            "extract_document",
-            document_id=str(extraction.source_document_id),
-            _job_id=f"extract_{extraction.source_document_id}",
-        )
+        job_kwargs: dict = {
+            "document_id": str(extraction.source_document_id),
+            "_job_id": f"extract_{extraction.source_document_id}",
+        }
+        if body and body.extraction_model:
+            job_kwargs["model"] = body.extraction_model
+        await arq_pool.enqueue_job("extract_document", **job_kwargs)
     return {
         "id": result.id,
         "status": result.status,
@@ -101,6 +108,7 @@ async def retry(
     response_model=ExtractAllResponse,
 )
 async def extract_all(
+    body: ExtractRequest | None = None,
     project: Project = Depends(get_project_or_404),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis | None = Depends(get_arq_pool),
@@ -116,10 +124,12 @@ async def extract_all(
         )
         extractable_docs = list(result.scalars().all())
         for doc in extractable_docs:
-            await arq_pool.enqueue_job(
-                "extract_document",
-                document_id=str(doc.id),
-                _job_id=f"extract_{doc.id}",
-            )
+            job_kwargs: dict = {
+                "document_id": str(doc.id),
+                "_job_id": f"extract_{doc.id}",
+            }
+            if body and body.extraction_model:
+                job_kwargs["model"] = body.extraction_model
+            await arq_pool.enqueue_job("extract_document", **job_kwargs)
 
     return data

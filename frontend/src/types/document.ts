@@ -7,6 +7,7 @@ export interface SourceDocument {
   file_size: number
   document_type: DocumentType
   status: string
+  error_message?: string | null
   created_at: string
   updated_at: string
 }

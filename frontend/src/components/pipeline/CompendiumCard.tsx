@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { Layers, FileStack } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,6 +9,8 @@ import { ProgressBar } from '@/components/pipeline/ProgressBar'
 import { SectionList } from '@/components/sections/SectionList'
 import { SectionEditor } from '@/components/sections/SectionEditor'
 import { mergeProject, generateProject, getSections } from '@/api/compendiums'
+import { getModels, type AiModel } from '@/api/ai'
+import { DEFAULT_MODEL } from '@/config/models'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { isProjectBusy, POLL_INTERVAL_MS } from '@/lib/pipeline'
 import type { Project, ProjectStatus } from '@/types/project'
@@ -28,6 +31,9 @@ export function CompendiumCard({
 }) {
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<CompendiumSection | null>(null)
+  const [models, setModels] = useState<AiModel[]>([])
+  const [selectedGemini, setSelectedGemini] = useState<string>(DEFAULT_MODEL)
+  const [selectedClaude, setSelectedClaude] = useState<string>(DEFAULT_MODEL)
 
   const { data: sections, mutate: mutateSections } = useSWR<CompendiumSection[]>(
     `/projects/${project.id}/sections`,
@@ -39,6 +45,24 @@ export function CompendiumCard({
       fallbackData: undefined,
     }
   )
+
+  useEffect(() => {
+    getModels().then((list) => {
+      setModels(list)
+    })
+  }, [])
+
+  const prevSectionStatuses = useRef<Map<string, string>>(new Map())
+  useEffect(() => {
+    if (!sections) return
+    for (const s of sections) {
+      const prev = prevSectionStatuses.current.get(s.id)
+      if (prev && prev !== 'failed' && s.status === 'failed') {
+        toast.error(`Sección ${s.section_number} falló: ${s.error_message || 'Error desconocido'}`)
+      }
+      prevSectionStatuses.current.set(s.id, s.status)
+    }
+  }, [sections])
 
   const mergedReady =
     !!project.merged_content && project.merged_content.length > 0
@@ -68,7 +92,11 @@ export function CompendiumCard({
   async function runGenerate() {
     setBusy(true)
     try {
-      const res = await generateProject(project.id)
+      const body = {
+        gemini_model: selectedGemini,
+        claude_model: selectedClaude,
+      }
+      const res = await generateProject(project.id, body)
       notifySuccess(`Generación iniciada: ${res.sections_created} secciones.`)
       onMutate()
       mutateSections()
@@ -98,6 +126,43 @@ export function CompendiumCard({
             <FileStack className="mr-2 h-4 w-4" />
             Generar compendio
           </Button>
+        </div>
+
+        <div className="flex flex-wrap gap-4">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-muted-foreground" htmlFor="gemini-model">
+              Motor Gemini:
+            </label>
+            <select
+              id="gemini-model"
+              value={selectedGemini}
+              onChange={(e) => setSelectedGemini(e.target.value)}
+              className="rounded-md border bg-background px-2 py-1 text-sm"
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-muted-foreground" htmlFor="claude-model">
+              Motor Claude:
+            </label>
+            <select
+              id="claude-model"
+              value={selectedClaude}
+              onChange={(e) => setSelectedClaude(e.target.value)}
+              className="rounded-md border bg-background px-2 py-1 text-sm"
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {!mergedReady && (

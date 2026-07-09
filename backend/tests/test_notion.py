@@ -25,7 +25,7 @@ async def _register_and_login(client, email: str, password: str = "Test1234"):
 
 async def _create_project(client, token: str, name: str = "Notion Project"):
     response = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": name},
         headers={"Authorization": f"Bearer {token}"},
     )

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.extraction import Extraction, ExtractionStatus
 from app.models.source_document import SourceDocument
 from app.services.storage import get_storage_backend
 
@@ -93,13 +94,43 @@ async def upload_documents(
 
 async def list_project_documents(
     db: AsyncSession, project_id: str
-) -> list[SourceDocument]:
+) -> list[dict]:
     result = await db.execute(
         select(SourceDocument)
         .where(SourceDocument.project_id == project_id)
         .order_by(SourceDocument.created_at.desc())
     )
-    return list(result.scalars().all())
+    documents = list(result.scalars().all())
+
+    doc_ids = [d.id for d in documents]
+    if not doc_ids:
+        return []
+
+    ext_result = await db.execute(
+        select(Extraction).where(
+            Extraction.source_document_id.in_(doc_ids),
+            Extraction.status == ExtractionStatus.FAILED,
+        )
+    )
+    errors_by_doc: dict[str, str] = {}
+    for ext in ext_result.scalars().all():
+        if ext.error_message:
+            errors_by_doc[ext.source_document_id] = ext.error_message
+
+    return [
+        {
+            "id": d.id,
+            "project_id": d.project_id,
+            "filename": d.filename,
+            "file_size": d.file_size,
+            "document_type": d.document_type,
+            "status": d.status,
+            "error_message": errors_by_doc.get(d.id),
+            "created_at": d.created_at,
+            "updated_at": d.updated_at,
+        }
+        for d in documents
+    ]
 
 
 async def get_document(

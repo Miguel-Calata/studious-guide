@@ -19,7 +19,7 @@ async def _register_and_login(client, email: str, password: str = "Test1234"):
 async def test_create_project(client):
     token = await _register_and_login(client, "proj-create@test.com")
     response = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "Lesión Renal Aguda", "description": "Test project"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -34,7 +34,7 @@ async def test_create_project(client):
 async def test_create_project_without_description(client):
     token = await _register_and_login(client, "proj-no-desc@test.com")
     response = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "Proyecto sin descripción"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -46,12 +46,12 @@ async def test_create_project_without_description(client):
 async def test_list_projects_excludes_archived(client):
     token = await _register_and_login(client, "proj-list@test.com")
     await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "Active Project"},
         headers={"Authorization": f"Bearer {token}"},
     )
     create_archived = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "Archived Project"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -62,7 +62,7 @@ async def test_list_projects_excludes_archived(client):
     )
 
     response = await client.get(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
@@ -75,7 +75,7 @@ async def test_list_projects_excludes_archived(client):
 async def test_update_project(client):
     token = await _register_and_login(client, "proj-update@test.com")
     created = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "Original Name"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -96,7 +96,7 @@ async def test_update_project(client):
 async def test_archive_project(client):
     token = await _register_and_login(client, "proj-archive@test.com")
     created = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "To Archive"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -123,7 +123,7 @@ async def test_cannot_access_other_user_project(client):
     token_b = await _register_and_login(client, "proj-intruder@test.com")
 
     created = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": "Private Project"},
         headers={"Authorization": f"Bearer {token_a}"},
     )

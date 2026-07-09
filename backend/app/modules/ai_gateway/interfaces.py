@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from app.modules.ai_gateway.models import DEFAULT_EXTRACTION_MODEL
+
 
 @dataclass
 class AIResult:
@@ -28,7 +30,7 @@ class AIGatewayClient(ABC):
     async def generate_with_continuations(
         self,
         prompt: str,
-        model: str = "google/gemini-2.5-pro",
+        model: str | None = None,
         temperature: float = 0.1,
         max_continuations: int = 10,
     ) -> AIResult: ...

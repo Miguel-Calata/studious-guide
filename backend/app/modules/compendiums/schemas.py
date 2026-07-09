@@ -1,6 +1,17 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class GenerateRequest(BaseModel):
+    gemini_model: str | None = Field(
+        default=None,
+        description="OpenRouter model ID for gemini-powered sections. None = default.",
+    )
+    claude_model: str | None = Field(
+        default=None,
+        description="OpenRouter model ID for claude-powered sections. None = default.",
+    )
 
 
 class SectionResponse(BaseModel):

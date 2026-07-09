@@ -37,6 +37,7 @@ export interface ExtractAllResponse {
   project_id: string
   total_documents: number
   enqueued: number
+  retried: number
   skipped: number
   project_status: string
 }

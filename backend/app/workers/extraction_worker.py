@@ -12,6 +12,8 @@ from app.database import async_session
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument, SourceDocumentStatus
+from app.modules.ai_gateway.errors import format_ai_error
+from app.modules.ai_gateway.models import DEFAULT_EXTRACTION_MODEL
 from app.modules.ai_gateway.openrouter_client import OpenRouterClient
 from app.modules.prompts.service import get_active_prompt
 from app.services.storage import get_storage_backend
@@ -68,7 +70,10 @@ async def _check_project_extractions_done(
 
 
 async def extract_document(
-    ctx: dict, document_id: str, _db: AsyncSession | None = None
+    ctx: dict,
+    document_id: str,
+    model: str | None = None,
+    _db: AsyncSession | None = None,
 ) -> dict:
     async with _get_session(_db) as db:
         result = await db.execute(
@@ -117,10 +122,11 @@ async def extract_document(
                 f"{pdf_text}"
             )
 
+            model_id = model or DEFAULT_EXTRACTION_MODEL
             ai = OpenRouterClient()
             ai_result = await ai.generate_with_continuations(
                 prompt=full_prompt,
-                model=OpenRouterClient.MODELS["gemini"],
+                model=model_id,
                 temperature=0.1,
             )
 
@@ -157,7 +163,7 @@ async def extract_document(
 
         except Exception as exc:
             extraction.status = ExtractionStatus.FAILED
-            extraction.error_message = str(exc)
+            extraction.error_message = format_ai_error(exc)
             document.set_status(SourceDocumentStatus.ERROR)
             await db.commit()
 
@@ -170,7 +176,7 @@ async def extract_document(
 
             await _check_project_extractions_done(db, document.project_id)
 
-            return {"status": "failed", "error": str(exc)}
+            return {"status": "failed", "error": format_ai_error(exc)}
 
 
 async def audit_extraction(ctx: dict, extraction_id: str) -> dict:

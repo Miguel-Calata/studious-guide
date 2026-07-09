@@ -217,6 +217,12 @@ DOSIFICATION_MAP = {
     "🔴 MÁXIMO": "MAX",
 }
 
+MAX_TOKENS_BY_DOSIFICATION = {
+    "STANDARD": 8192,
+    "HIGH": 16384,
+    "MAX": 32768,
+}
+
 
 def _build_ecos_block(ecos: list[str]) -> str:
     if not ecos:
@@ -233,14 +239,14 @@ def _build_ecos_block(ecos: list[str]) -> str:
 def _build_attachment_note(is_first: bool) -> str:
     if is_first:
         return (
-            "\n📎 Adjunta los documentos fuente a esta conversación AHORA, "
-            "antes de enviar este prompt (una sola vez para toda la sesión).\n"
+            "\nEl contenido fuente (extracciones fusionadas) se incluye "
+            "al final de este prompt. Usalo como unica base documental.\n"
         )
     return (
-        "\n📎 Los documentos fuente YA están adjuntos desde el inicio de "
-        "esta conversación — no los vuelvas a adjuntar.\n"
-        "Esta es una SECCIÓN NUEVA del compendio, no una continuación "
-        "de la sección anterior. Comienza directamente.\n"
+        "\nEl contenido fuente (extracciones fusionadas) se incluye "
+        "al final de este prompt. Usalo como unica base documental.\n"
+        "Esta es una SECCION NUEVA del compendio, no una continuacion "
+        "de la seccion anterior. Comienza directamente.\n"
     )
 
 
@@ -280,26 +286,39 @@ def build_section_prompt(
         else ""
     )
 
+    source_block = ""
+    if merged_content and merged_content.strip():
+        source_block = (
+            f"\n{'=' * 70}\n"
+            f"CONTENIDO FUENTE (extracciones fusionadas):\n"
+            f"{'=' * 70}\n\n"
+            f"{merged_content.strip()}\n\n"
+            f"{'=' * 70}\n"
+            f"FIN DEL CONTENIDO FUENTE\n"
+            f"{'=' * 70}\n\n"
+        )
+
     prompt = (
         f"{prefix}"
         f"{system_prompt.strip()}\n\n"
         f"{'=' * 70}\n"
-        f"INSTRUCCIÓN DE SESIÓN — SAM v9\n"
+        f"INSTRUCCION DE SESION - SAM v9\n"
         f"{'=' * 70}\n\n"
-        f"PATOLOGÍA : {pathology_name}\n"
+        f"PATOLOGIA : {pathology_name}\n"
         f"FUENTE(S) : {source_filename}\n"
         f"MOTOR     : {config.motor}{thinking_note}\n"
         f"{attachment_note}\n"
-        f"SECCIÓN A DESARROLLAR : {config.section_name}\n"
-        f"SECCIÓN SIGUIENTE     : {config.next_section}\n\n"
-        f"DOSIFICACIÓN DEL RAZONAMIENTO PARA ESTA SECCIÓN:\n"
-        f"  {config.dosification_level} — {config.dosification_desc}\n"
+        f"SECCION A DESARROLLAR : {config.section_name}\n"
+        f"SECCION SIGUIENTE     : {config.next_section}\n\n"
+        f"DOSIFICACION DEL RAZONAMIENTO PARA ESTA SECCION:\n"
+        f"  {config.dosification_level} - {config.dosification_desc}\n"
         f"{ecos_block}"
         f"{cogen_note}"
         f"{last_note}\n"
-        f"INSTRUCCIÓN: Desarrolla ÚNICAMENTE la sección \"{config.section_name}\" del\n"
-        f"compendio, usando exclusivamente los documentos adjuntos. No incluyas\n"
-        f"contenido de otras secciones del compendio.\n\n"
+        f"INSTRUCCION: Desarrolla UNICAMENTE la seccion \"{config.section_name}\" del\n"
+        f"compendio, usando exclusivamente el CONTENIDO FUENTE incluido abajo.\n"
+        f"No incluyas contenido de otras secciones del compendio.\n\n"
+        f"{source_block}"
         f"{'=' * 70}\n"
         f"COMIENZA AHORA: {config.section_name}\n"
         f"{'=' * 70}\n"

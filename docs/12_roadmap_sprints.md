@@ -262,10 +262,27 @@ Documento maestro de planificación. Cada sprint tiene objetivo, tareas, tests d
 > **Decisión F-15:** Flujo merge→generate como dos acciones explícitas separadas, respetando la máquina de estados del backend.
 > **Decisión F-16:** Feedback de errores/éxito con **sonner** (toasts), mapeando el `detail` de los 409 del backend.
 
-### Sprint 11: Public viewer + publish
-- Pantalla de publicar.
-- Visor público de compendios.
-- Botón "Abrir en Notion".
+### Sprint 11: Public viewer + publish ✅
+- [x] Proxy `/public/` en nginx y Vite (bloqueador de infra).
+- [x] Tipos y clientes API: `publishing`, `public`, `notion`.
+- [x] `PublishCard` en `ProjectDetailPage` con secciones de web pública y Notion.
+- [x] Publicar web (S3): botón, gates por estado, badge, links al visor y descarga.
+- [x] Notion: connect (API key), buscar páginas padre, configurar parent, publicar, "Abrir en Notion".
+- [x] `PublicShell`: layout ligero para visor público (sin auth).
+- [x] Rutas `/compendiums` y `/compendiums/:slug` (fuera de `ProtectedRoute`).
+- [x] Listado público de compendios con tarjetas.
+- [x] Detalle público con TOC + secciones renderizadas con **marked.js + DOMPurify**.
+- [x] Descargar `.md` desde visor público.
+- [x] Header autenticado: link "Compendios públicos".
+- [x] Badge "Publicado" en cabecera de proyecto.
+- [x] Tests Vitest: 17 archivos, 63 tests (publishing, public, notion, PublishCard, PublicCompendiumListPage).
+- [x] `tsc -b` y `oxlint` limpios.
+
+> **Decisiones:**
+> - **F-17:** `@uiw/react-md-editor` = edición en pipeline; **marked.js + DOMPurify** = visor público.
+> - **F-18:** Rutas SPA = `/compendiums` y `/compendiums/:slug`.
+> - **F-19:** Notion completo en detalle de proyecto (connect + parent + publish + abrir).
+> - **F-20:** Dos acciones independientes: "Publicar web" (S3) y "Publicar en Notion".
 
 ---
 

@@ -18,7 +18,7 @@ async def test_seed_prompts_are_loaded(client):
     token = await _register_and_login(client, "prompt-seed@test.com")
 
     response = await client.get(
-        "/api/v1/prompts/",
+        "/api/v1/prompts",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200

@@ -38,6 +38,7 @@ const section: CompendiumSection = {
   cost_usd: 0.01,
   status: 'completed',
   prompt_version: 'v1',
+  notion_page_id: null,
   error_message: null,
   created_at: '2026-07-06T18:00:00Z',
   updated_at: '2026-07-06T18:00:00Z',

@@ -10,7 +10,7 @@ from app.modules.prompts.service import get_active_prompt, list_prompts, update_
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
 
 
-@router.get("/", response_model=list[PromptResponse])
+@router.get("", response_model=list[PromptResponse])
 async def list_all(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

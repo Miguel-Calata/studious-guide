@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import engine
+from app.modules.ai_gateway.openrouter_client import OpenRouterClient
 from app.modules.auth.router import router as auth_router
 from app.modules.compendiums.router import router as compendiums_router
 from app.modules.documents.router import router as documents_router
@@ -98,6 +99,10 @@ def create_app() -> FastAPI:
     app.include_router(publishing_router, prefix="/api/v1")
     app.include_router(publishing_public_router)
     app.include_router(notion_router, prefix="/api/v1")
+
+    @app.get("/api/v1/ai/models")
+    async def list_ai_models() -> list[dict]:
+        return OpenRouterClient.AVAILABLE_MODELS
 
     return app
 

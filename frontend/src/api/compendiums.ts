@@ -10,8 +10,11 @@ export function mergeProject(projectId: string): Promise<MergeResponse> {
   return api.post<MergeResponse>(`/projects/${projectId}/merge`)
 }
 
-export function generateProject(projectId: string): Promise<GenerateResponse> {
-  return api.post<GenerateResponse>(`/projects/${projectId}/generate`)
+export function generateProject(
+  projectId: string,
+  body?: { gemini_model?: string; claude_model?: string }
+): Promise<GenerateResponse> {
+  return api.post<GenerateResponse>(`/projects/${projectId}/generate`, body)
 }
 
 export function getSections(

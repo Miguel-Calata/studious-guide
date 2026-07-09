@@ -191,7 +191,7 @@ async def download_compendium(
             detail="Compendio no encontrado",
         )
 
-    key = f"compendiums/{project.slug}.md"
+    key = f"local://compendiums/{project.slug}.md"
     content = await storage.read_bytes(key)
     filename = f"{project.slug}.md"
     return filename, content

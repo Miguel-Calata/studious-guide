@@ -45,6 +45,11 @@ export function SectionList({
               </Badge>
             </span>
           </button>
+          {section.status === 'failed' && section.error_message && (
+            <p className="px-3 pb-2 text-xs text-destructive line-clamp-2">
+              {section.error_message}
+            </p>
+          )}
         </li>
       ))}
     </ul>

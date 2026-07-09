@@ -66,6 +66,7 @@ async def generate_sections(
     db: AsyncSession,
     project: Project,
     arq_pool=None,
+    model_overrides: dict | None = None,
 ) -> dict:
     if project.status not in (ProjectStatus.DRAFT, ProjectStatus.REVIEW):
         raise HTTPException(
@@ -113,12 +114,14 @@ async def generate_sections(
 
     if arq_pool is not None:
         for section_number in range(1, 12):
-            await arq_pool.enqueue_job(
-                "generate_section",
-                project_id=str(project.id),
-                section_number=section_number,
-                _job_id=f"generate_{project.id}_{section_number}",
-            )
+            job_kwargs: dict = {
+                "project_id": str(project.id),
+                "section_number": section_number,
+                "_job_id": f"generate_{project.id}_{section_number}",
+            }
+            if model_overrides:
+                job_kwargs["model_overrides"] = model_overrides
+            await arq_pool.enqueue_job("generate_section", **job_kwargs)
 
     return {
         "project_id": str(project.id),
@@ -172,6 +175,7 @@ async def regenerate_section(
     db: AsyncSession,
     section: CompendiumSection,
     arq_pool=None,
+    model_overrides: dict | None = None,
 ) -> CompendiumSection:
     if section.status not in (
         SectionStatus.COMPLETED,
@@ -193,11 +197,13 @@ async def regenerate_section(
     await db.refresh(section)
 
     if arq_pool is not None:
-        await arq_pool.enqueue_job(
-            "generate_section",
-            project_id=str(section.project_id),
-            section_number=section.section_number,
-            _job_id=f"generate_{section.project_id}_{section.section_number}",
-        )
+        job_kwargs: dict = {
+            "project_id": str(section.project_id),
+            "section_number": section.section_number,
+            "_job_id": f"generate_{section.project_id}_{section.section_number}",
+        }
+        if model_overrides:
+            job_kwargs["model_overrides"] = model_overrides
+        await arq_pool.enqueue_job("generate_section", **job_kwargs)
 
     return section

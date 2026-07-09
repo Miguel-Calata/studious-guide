@@ -20,6 +20,7 @@ export interface CompendiumSection {
   cost_usd: number | null
   status: SectionStatus
   prompt_version: string | null
+  notion_page_id: string | null
   error_message: string | null
   created_at: string
   updated_at: string

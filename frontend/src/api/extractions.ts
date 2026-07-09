@@ -7,9 +7,10 @@ import type {
 } from '@/types/extraction'
 
 export function extractAllForProject(
-  projectId: string
+  projectId: string,
+  body?: { extraction_model?: string }
 ): Promise<ExtractAllResponse> {
-  return api.post<ExtractAllResponse>(`/projects/${projectId}/extract-all`)
+  return api.post<ExtractAllResponse>(`/projects/${projectId}/extract-all`, body)
 }
 
 export function getExtraction(id: string): Promise<Extraction> {

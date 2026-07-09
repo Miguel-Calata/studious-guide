@@ -1,4 +1,5 @@
 import { Link, useParams } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
 import useSWR from 'swr'
 
 import { Badge } from '@/components/ui/badge'
@@ -8,11 +9,15 @@ import { DocumentUploader } from '@/components/documents/DocumentUploader'
 import { DocumentList } from '@/components/documents/DocumentList'
 import { ExtractionCard } from '@/components/pipeline/ExtractionCard'
 import { CompendiumCard } from '@/components/pipeline/CompendiumCard'
+import { PublishCard } from '@/components/publish/PublishCard'
 import { getDocuments } from '@/api/documents'
+import { getSections } from '@/api/compendiums'
 import { useProjectPolling } from '@/hooks/useProjectPolling'
 import { statusLabel, statusVariant } from '@/lib/projects'
 import { isProjectBusy, POLL_INTERVAL_MS } from '@/lib/pipeline'
+import { toast } from 'sonner'
 import type { SourceDocument as Doc } from '@/types/document'
+import type { CompendiumSection } from '@/types/compendium'
 
 export function ProjectDetailPage() {
   const { id = '' } = useParams<{ id: string }>()
@@ -32,6 +37,24 @@ export function ProjectDetailPage() {
         project && isProjectBusy(project.status) ? POLL_INTERVAL_MS : 0,
       revalidateOnFocus: false,
     }
+  )
+
+  const prevStatuses = useRef<Map<string, string>>(new Map())
+  useEffect(() => {
+    if (!documents) return
+    for (const doc of documents) {
+      const prev = prevStatuses.current.get(doc.id)
+      if (prev && prev !== 'error' && doc.status === 'error') {
+        toast.error(`Error al extraer "${doc.filename}": ${doc.error_message || 'Error desconocido'}`)
+      }
+      prevStatuses.current.set(doc.id, doc.status)
+    }
+  }, [documents])
+
+  const { data: sections } = useSWR<CompendiumSection[]>(
+    id ? `/projects/${id}/sections` : null,
+    () => getSections(id),
+    { revalidateOnFocus: false }
   )
 
   if (projectError) {
@@ -71,6 +94,9 @@ export function ProjectDetailPage() {
           <Badge variant={statusVariant(project.status)}>
             {statusLabel(project.status)}
           </Badge>
+          {project.is_published && (
+            <Badge variant="success">Publicado</Badge>
+          )}
         </div>
         {project.description && (
           <p className="mt-1 text-muted-foreground">{project.description}</p>
@@ -117,6 +143,12 @@ export function ProjectDetailPage() {
       <CompendiumCard
         project={project}
         hasExtractedDocs={hasExtractedDocs}
+        onMutate={refreshAll}
+      />
+
+      <PublishCard
+        project={project}
+        sections={sections ?? []}
         onMutate={refreshAll}
       />
     </div>

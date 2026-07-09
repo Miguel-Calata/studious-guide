@@ -4,6 +4,60 @@ Registro cronológico de decisiones arquitectónicas, cambios de diseño y desvi
 
 ---
 
+## 2026-07-08 — Sprint 11: Public viewer + publish (frontend)
+
+### Alcance
+Publicación de compendios (web + Notion) desde el detalle de proyecto, y visor público sin autenticación. Sin cambios en backend (todos los endpoints ya existían de Sprints 6–7).
+
+### Decisiones
+
+| # | Decisión | Justificación | Alternativas |
+|---|----------|---------------|-------------|
+| F-17 | **marked.js + DOMPurify para visor público; @uiw/react-md-editor para edición** | El visor público es read-only y debe ser ligero y seguro (MD de terceros). El editor se mantiene para revisión en el pipeline | Reutilizar react-markdown en ambos (menos control sobre sanitización) |
+| F-18 | **Rutas SPA: `/compendiums` y `/compendiums/:slug`** | Cortas, limpias, alineadas con la API pública. Fuera de `ProtectedRoute` | `/c/:slug` (más corto pero menos descriptivo), espejo de `/public/` (confunde con proxy) |
+| F-19 | **Notion completo en detalle de proyecto** | Connect + buscar parent + configurar + publicar + abrir, todo en `PublishCard`. Un solo lugar para todo el flujo | Página `/settings/notion` separada (más clicks), mínimo "solo publicar si ya conectado" |
+| F-20 | **Dos botones independientes: "Publicar web" y "Publicar en Notion"** | Respeta la independencia de los canales del backend. S3 = público; Notion = workspace del Dr. | Modal unificado con checkboxes (mezcla responsabilidades) |
+
+### Infraestructura
+
+- [x] `docker/nginx.frontend.conf`: proxy `location /public/` → `backend:8000`.
+- [x] `frontend/vite.config.ts`: proxy `/public` → `http://localhost:8000`.
+- [x] Dependencias nuevas: `marked`, `dompurify`, `@types/dompurify`.
+
+### Archivos nuevos
+
+- `frontend/src/types/publishing.ts`, `frontend/src/types/public.ts`, `frontend/src/types/notion.ts`
+- `frontend/src/api/publishing.ts`, `frontend/src/api/public.ts`, `frontend/src/api/notion.ts`
+- `frontend/src/components/publish/PublishCard.tsx`
+- `frontend/src/components/layout/PublicShell.tsx`
+- `frontend/src/components/public/MarkdownViewer.tsx`, `frontend/src/components/public/MarkdownViewer.css`
+- `frontend/src/pages/PublicCompendiumListPage.tsx`, `frontend/src/pages/PublicCompendiumDetailPage.tsx`
+- `frontend/src/test/publishing.test.ts`, `frontend/src/test/public.test.ts`, `frontend/src/test/notion.test.ts`
+- `frontend/src/test/PublishCard.test.tsx`, `frontend/src/test/PublicCompendiumListPage.test.tsx`
+
+### Archivos modificados
+
+- `docker/nginx.frontend.conf` — +proxy `/public/`
+- `frontend/vite.config.ts` — +proxy `/public`
+- `frontend/package.json` — +`marked`, `dompurify`, `@types/dompurify`
+- `frontend/src/types/compendium.ts` — +`notion_page_id` en `CompendiumSection`
+- `frontend/src/pages/ProjectDetailPage.tsx` — +`PublishCard`, +`sections` SWR, +badge "Publicado"
+- `frontend/src/routes/AppRouter.tsx` — +rutas públicas `/compendiums[/:slug]`
+- `frontend/src/components/layout/Header.tsx` — +link "Compendios públicos"
+- `frontend/src/test/compendiums.test.ts` — +`notion_page_id` en fixture
+- `frontend/src/test/SectionList.test.tsx` — +`notion_page_id` en fixtures
+- `docs/12_roadmap_sprints.md` — Sprint 11 marcado como completado
+
+### Notas
+
+- 63 tests Vitest pasando (17 archivos). `tsc -b` y `oxlint` limpios.
+- El botón "Publicar en Notion" muestra "Puede tardar hasta 30 segundos" durante la operación síncrona.
+- El visor público usa `marked.parse()` + `DOMPurify.sanitize()` para mitigar XSS en Markdown de terceros.
+- Las rutas públicas están fuera de `ProtectedRoute`; el catch-all `*` manda a `/` (panel o login), no a las rutas públicas.
+- El `PublishCard` solo muestra los botones de publicación cuando `status ∈ {review, completed}` y hay 11 secciones aprobadas/completas.
+
+---
+
 ## 2026-07-08 — Sprint 10: Pipeline UI (frontend)
 
 ### Alcance

@@ -84,6 +84,12 @@ export function SectionEditor({
           </DialogDescription>
         </DialogHeader>
 
+        {section.status === 'failed' && section.error_message && (
+          <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {section.error_message}
+          </div>
+        )}
+
         <div data-color-mode="light" className="max-h-[60vh] overflow-auto">
           <Suspense fallback={<p className="text-sm text-muted-foreground">Cargando editor…</p>}>
             <MDEditor

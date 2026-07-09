@@ -4,13 +4,11 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.config import settings
 from app.modules.ai_gateway.interfaces import AIResult, AIGatewayClient
+from app.modules.ai_gateway.models import AVAILABLE_MODELS, DEFAULT_EXTRACTION_MODEL
 
 
 class OpenRouterClient(AIGatewayClient):
-    MODELS = {
-        "gemini": "google/gemini-2.5-pro",
-        "claude": "anthropic/claude-3.5-sonnet",
-    }
+    AVAILABLE_MODELS = AVAILABLE_MODELS
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.client = AsyncOpenAI(
@@ -66,10 +64,11 @@ class OpenRouterClient(AIGatewayClient):
     async def generate_with_continuations(
         self,
         prompt: str,
-        model: str = "google/gemini-2.5-pro",
+        model: str | None = None,
         temperature: float = 0.1,
         max_continuations: int = 10,
     ) -> AIResult:
+        model = model or DEFAULT_EXTRACTION_MODEL
         result = await self.generate(prompt, model, temperature)
         full_content = result.content
         total_input = result.input_tokens

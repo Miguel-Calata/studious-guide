@@ -13,6 +13,7 @@ from app.modules.compendiums.dependencies import (
     get_section_or_404,
 )
 from app.modules.compendiums.schemas import (
+    GenerateRequest,
     GenerateResponse,
     MergeResponse,
     SectionResponse,
@@ -51,11 +52,21 @@ async def merge(
     response_model=GenerateResponse,
 )
 async def generate(
+    body: GenerateRequest | None = None,
     project: Project = Depends(get_project_for_compendium),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis | None = Depends(get_arq_pool),
 ) -> dict:
-    return await generate_sections(db, project, arq_pool)
+    model_overrides: dict | None = None
+    if body:
+        model_overrides = {}
+        if body.gemini_model:
+            model_overrides["gemini"] = body.gemini_model
+        if body.claude_model:
+            model_overrides["claude"] = body.claude_model
+        if not model_overrides:
+            model_overrides = None
+    return await generate_sections(db, project, arq_pool, model_overrides)
 
 
 @router.get(
@@ -96,8 +107,18 @@ async def update_one(
     response_model=SectionResponse,
 )
 async def regenerate_one(
+    body: GenerateRequest | None = None,
     section: CompendiumSection = Depends(get_section_or_404),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis | None = Depends(get_arq_pool),
 ) -> CompendiumSection:
-    return await regenerate_section(db, section, arq_pool)
+    model_overrides: dict | None = None
+    if body:
+        model_overrides = {}
+        if body.gemini_model:
+            model_overrides["gemini"] = body.gemini_model
+        if body.claude_model:
+            model_overrides["claude"] = body.claude_model
+        if not model_overrides:
+            model_overrides = None
+    return await regenerate_section(db, section, arq_pool, model_overrides)

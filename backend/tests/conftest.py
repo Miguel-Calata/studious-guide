@@ -6,6 +6,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 import pytest_asyncio
+import httpx
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -20,6 +21,16 @@ TEST_DATABASE_URL = os.environ.get(
 )
 TEST_DATABASE_NAME = TEST_DATABASE_URL.rsplit("/", 1)[-1]
 TEST_DATABASE_ADMIN_URL = TEST_DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
+
+
+class CookieStrippingTransport(ASGITransport):
+    """Transport that strips Set-Cookie headers to prevent httpx from persisting cookies."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await super().handle_async_request(request)
+        # Remove Set-Cookie headers so httpx doesn't store them in its cookie jar
+        response.headers.pop("set-cookie", None)
+        return response
 
 
 def _async_url_to_dsn(url: str) -> str:
@@ -99,7 +110,7 @@ async def client(db_session: AsyncSession, test_storage: LocalStorageBackend):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_arq_pool] = override_get_arq_pool
     app.dependency_overrides[get_storage] = override_get_storage
-    transport = ASGITransport(app=app)
+    transport = CookieStrippingTransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()

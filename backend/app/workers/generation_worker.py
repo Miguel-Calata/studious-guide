@@ -1,4 +1,3 @@
-import asyncio
 import structlog
 from contextlib import asynccontextmanager
 
@@ -8,9 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models.compendium_section import CompendiumSection, SectionStatus
 from app.models.project import Project, ProjectStatus
+from app.modules.ai_gateway.errors import format_ai_error
+from app.modules.ai_gateway.models import DEFAULT_GENERATION_MODEL
 from app.modules.ai_gateway.openrouter_client import OpenRouterClient
 from app.modules.prompts.section_builder import (
     DOSIFICATION_MAP,
+    MAX_TOKENS_BY_DOSIFICATION,
     SECTION_CONFIGS,
     build_section_prompt,
 )
@@ -19,8 +21,8 @@ from app.modules.prompts.service import get_active_prompt
 log = structlog.get_logger()
 
 MOTOR_MODEL_MAP = {
-    "gemini": OpenRouterClient.MODELS["gemini"],
-    "claude": OpenRouterClient.MODELS["claude"],
+    "gemini": DEFAULT_GENERATION_MODEL,
+    "claude": DEFAULT_GENERATION_MODEL,
 }
 
 
@@ -36,48 +38,45 @@ async def _get_session(db: AsyncSession | None):
 async def _check_all_sections_done(
     db: AsyncSession, project_id: str
 ) -> None:
-    for _ in range(10):
-        async with async_session() as check_db:
-            result = await check_db.execute(
-                select(CompendiumSection).where(
-                    CompendiumSection.project_id == project_id
-                )
-            )
-            all_sections = list(result.scalars().all())
+    result = await db.execute(
+        select(CompendiumSection).where(
+            CompendiumSection.project_id == project_id
+        )
+    )
+    all_sections = list(result.scalars().all())
 
-            if len(all_sections) < 11:
-                return
+    if len(all_sections) < 11:
+        return
 
-            all_done = all(
-                s.status in (SectionStatus.COMPLETED, SectionStatus.FAILED)
-                for s in all_sections
-            )
+    all_done = all(
+        s.status in (SectionStatus.COMPLETED, SectionStatus.FAILED)
+        for s in all_sections
+    )
 
-            if not all_done:
-                await asyncio.sleep(1)
-                continue
+    if not all_done:
+        return
 
-            project_result = await check_db.execute(
-                select(Project).where(Project.id == project_id)
-            )
-            project = project_result.scalar_one_or_none()
-            if project is None:
-                return
+    project_result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    if project is None:
+        return
 
-            if project.status == ProjectStatus.GENERATING:
-                project.set_status(ProjectStatus.REVIEW)
-                await check_db.commit()
-                log.info(
-                    "project_transitioned_to_review",
-                    project_id=str(project.id),
-                )
-            return
+    if project.status == ProjectStatus.GENERATING:
+        project.set_status(ProjectStatus.REVIEW)
+        await db.commit()
+        log.info(
+            "project_transitioned_to_review",
+            project_id=str(project.id),
+        )
 
 
 async def generate_section(
     ctx: dict,
     project_id: str,
     section_number: int,
+    model_overrides: dict | None = None,
     _db: AsyncSession | None = None,
 ) -> dict:
     async with _get_session(_db) as db:
@@ -103,7 +102,8 @@ async def generate_section(
 
         try:
             config = SECTION_CONFIGS[section_number]
-            model_id = MOTOR_MODEL_MAP[config.motor]
+            effective_map = {**MOTOR_MODEL_MAP, **(model_overrides or {})}
+            model_id = effective_map[config.motor]
 
             system_prompt_rec = await get_active_prompt(
                 db, "system_prompt_sam_v9"
@@ -133,11 +133,12 @@ async def generate_section(
             )
 
             ai = OpenRouterClient()
+            max_tokens = MAX_TOKENS_BY_DOSIFICATION.get(DOSIFICATION_MAP.get(config.dosification_level, "STANDARD"), 8192)
             ai_result = await ai.generate(
                 prompt=prompt,
                 model=model_id,
                 temperature=0.1,
-                max_tokens=65536,
+                max_tokens=max_tokens,
             )
 
             section.content = ai_result.content
@@ -166,7 +167,7 @@ async def generate_section(
 
         except Exception as exc:
             section.status = SectionStatus.FAILED
-            section.error_message = str(exc)
+            section.error_message = format_ai_error(exc)
             await db.commit()
 
             log.error(
@@ -179,4 +180,4 @@ async def generate_section(
 
             await _check_all_sections_done(db, project_id)
 
-            return {"status": "failed", "error": str(exc)}
+            return {"status": "failed", "error": format_ai_error(exc)}

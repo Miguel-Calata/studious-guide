@@ -95,11 +95,16 @@ export function DocumentList({
                    {documentTypeLabel(doc.document_type)}
                  </Badge>
                </TableCell>
-               <TableCell>
-                 <Badge variant={documentStatusVariant(doc.status)}>
-                   {documentStatusLabel(doc.status)}
-                 </Badge>
-               </TableCell>
+                <TableCell>
+                  <Badge variant={documentStatusVariant(doc.status)}>
+                    {documentStatusLabel(doc.status)}
+                  </Badge>
+                  {doc.status === 'error' && doc.error_message && (
+                    <p className="mt-1 text-xs text-destructive line-clamp-2">
+                      {doc.error_message}
+                    </p>
+                  )}
+                </TableCell>
                <TableCell className="text-muted-foreground">
                  {formatSize(doc.file_size)}
                </TableCell>

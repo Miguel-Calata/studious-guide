@@ -9,9 +9,17 @@ export function Header() {
   return (
     <header className="border-b bg-background">
       <div className="container flex h-14 items-center justify-between">
-        <Link to="/" className="font-semibold">
-          SAM Platform
-        </Link>
+        <div className="flex items-center gap-6">
+          <Link to="/" className="font-semibold">
+            SAM Platform
+          </Link>
+          <Link
+            to="/compendiums"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Compendios públicos
+          </Link>
+        </div>
         {user && (
           <div className="flex items-center gap-4">
             <span className="text-sm text-muted-foreground">

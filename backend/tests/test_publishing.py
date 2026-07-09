@@ -23,7 +23,7 @@ async def _register_and_login(client, email: str, password: str = "Test1234"):
 
 async def _create_project(client, token: str, name: str = "Publish Project"):
     response = await client.post(
-        "/api/v1/projects/",
+        "/api/v1/projects",
         json={"name": name},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -197,7 +197,7 @@ async def test_publish_file_exists_in_storage(client, db_session, test_storage):
     assert response.status_code == 200
 
     slug = response.json()["slug"]
-    exists = await test_storage.exists(f"compendiums/{slug}.md")
+    exists = await test_storage.exists(f"local://compendiums/{slug}.md")
     assert exists
 
 

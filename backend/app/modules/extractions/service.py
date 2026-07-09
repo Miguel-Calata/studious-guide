@@ -116,32 +116,41 @@ async def extract_all_for_project(
 
     enqueued = 0
     skipped = 0
+    retried = 0
 
     for document in all_documents:
         existing_result = await db.execute(
             select(Extraction).where(
                 Extraction.source_document_id == document.id,
-                Extraction.status.in_([
-                    ExtractionStatus.PENDING,
-                    ExtractionStatus.PROCESSING,
-                    ExtractionStatus.COMPLETED,
-                ]),
             )
         )
-        if existing_result.scalar_one_or_none() is not None:
+        existing = existing_result.scalar_one_or_none()
+
+        if existing is None:
+            extraction = Extraction(
+                source_document_id=document.id,
+                content="",
+                status=ExtractionStatus.PENDING,
+            )
+            db.add(extraction)
+            document.set_status(SourceDocumentStatus.EXTRACTING)
+            enqueued += 1
+
+        elif existing.status == ExtractionStatus.FAILED:
+            existing.status = ExtractionStatus.PENDING
+            existing.error_message = None
+            existing.content = ""
+            document.set_status(SourceDocumentStatus.EXTRACTING)
+            retried += 1
+
+        elif existing.status in (
+            ExtractionStatus.PENDING,
+            ExtractionStatus.PROCESSING,
+            ExtractionStatus.COMPLETED,
+        ):
             skipped += 1
-            continue
 
-        extraction = Extraction(
-            source_document_id=document.id,
-            content="",
-            status=ExtractionStatus.PENDING,
-        )
-        db.add(extraction)
-        document.set_status(SourceDocumentStatus.EXTRACTING)
-        enqueued += 1
-
-    if enqueued > 0:
+    if enqueued > 0 or retried > 0:
         project.set_status(ProjectStatus.EXTRACTING)
     await db.commit()
 
@@ -149,6 +158,7 @@ async def extract_all_for_project(
         "project_id": str(project.id),
         "total_documents": len(all_documents),
         "enqueued": enqueued,
+        "retried": retried,
         "skipped": skipped,
         "project_status": project.status,
     }
