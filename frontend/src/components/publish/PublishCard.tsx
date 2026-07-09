@@ -37,6 +37,17 @@ export function PublishCard({ project, sections, onMutate }: PublishCardProps) {
     sections.length === 11 &&
     sections.every((s) => s.status === 'completed' || s.status === 'approved')
 
+  const failedCount = sections.filter((s) => s.status === 'failed').length
+  const doneCount = sections.filter(
+    (s) => s.status === 'completed' || s.status === 'approved'
+  ).length
+  const publishGateMessage =
+    failedCount > 0
+      ? `${failedCount} sección(es) fallaron. Regenera las secciones antes de publicar.`
+      : doneCount < 11
+        ? `Generando compendio... (${doneCount}/11 secciones)`
+        : 'Necesitas generar y revisar las 11 secciones antes de publicar.'
+
   return (
     <Card>
       <CardHeader>
@@ -46,12 +57,14 @@ export function PublishCard({ project, sections, onMutate }: PublishCardProps) {
         <WebPublishSection
           project={project}
           canPublish={canPublish}
+          publishGateMessage={publishGateMessage}
           onMutate={onMutate}
         />
         <Separator />
         <NotionPublishSection
           project={project}
           canPublish={canPublish}
+          publishGateMessage={publishGateMessage}
         />
       </CardContent>
     </Card>
@@ -63,10 +76,12 @@ export function PublishCard({ project, sections, onMutate }: PublishCardProps) {
 function WebPublishSection({
   project,
   canPublish,
+  publishGateMessage,
   onMutate,
 }: {
   project: Project
   canPublish: boolean
+  publishGateMessage: string
   onMutate: () => void
 }) {
   const [loading, setLoading] = useState(false)
@@ -136,7 +151,7 @@ function WebPublishSection({
           </Button>
           {!canPublish && project.status !== 'completed' && (
             <p className="text-xs text-muted-foreground">
-              Necesitas generar y revisar las 11 secciones antes de publicar.
+              {publishGateMessage}
             </p>
           )}
         </div>
@@ -150,9 +165,11 @@ function WebPublishSection({
 function NotionPublishSection({
   project,
   canPublish,
+  publishGateMessage,
 }: {
   project: Project
   canPublish: boolean
+  publishGateMessage: string
 }) {
   const { data: notionStatus, mutate: mutateNotion } = useSWR(
     '/notion/status',
@@ -183,6 +200,7 @@ function NotionPublishSection({
         <NotionConnectedBlock
           project={project}
           canPublish={canPublish}
+          publishGateMessage={publishGateMessage}
           status={notionStatus}
           onStatusChange={mutateNotion}
         />
@@ -251,11 +269,13 @@ function NotionConnectBlock({ onConnected }: { onConnected: () => void }) {
 function NotionConnectedBlock({
   project,
   canPublish,
+  publishGateMessage,
   status,
   onStatusChange,
 }: {
   project: Project
   canPublish: boolean
+  publishGateMessage: string
   status: NotionStatusResponse
   onStatusChange: () => void
 }) {
@@ -415,7 +435,7 @@ function NotionConnectedBlock({
 
       {!canPublish && (
         <p className="text-xs text-muted-foreground">
-          Necesitas generar y revisar las 11 secciones antes de publicar.
+          {publishGateMessage}
         </p>
       )}
     </div>

@@ -35,41 +35,40 @@ async def _get_session(db: AsyncSession | None):
             yield new_db
 
 
-async def _check_all_sections_done(
-    db: AsyncSession, project_id: str
-) -> None:
-    result = await db.execute(
-        select(CompendiumSection).where(
-            CompendiumSection.project_id == project_id
+async def _check_all_sections_done(project_id: str) -> None:
+    async with async_session() as fresh_db:
+        result = await fresh_db.execute(
+            select(CompendiumSection).where(
+                CompendiumSection.project_id == project_id
+            )
         )
-    )
-    all_sections = list(result.scalars().all())
+        all_sections = list(result.scalars().all())
 
-    if len(all_sections) < 11:
-        return
+        if len(all_sections) < 11:
+            return
 
-    all_done = all(
-        s.status in (SectionStatus.COMPLETED, SectionStatus.FAILED)
-        for s in all_sections
-    )
-
-    if not all_done:
-        return
-
-    project_result = await db.execute(
-        select(Project).where(Project.id == project_id)
-    )
-    project = project_result.scalar_one_or_none()
-    if project is None:
-        return
-
-    if project.status == ProjectStatus.GENERATING:
-        project.set_status(ProjectStatus.REVIEW)
-        await db.commit()
-        log.info(
-            "project_transitioned_to_review",
-            project_id=str(project.id),
+        all_done = all(
+            s.status in (SectionStatus.COMPLETED, SectionStatus.FAILED)
+            for s in all_sections
         )
+
+        if not all_done:
+            return
+
+        project_result = await fresh_db.execute(
+            select(Project).where(Project.id == project_id)
+        )
+        project = project_result.scalar_one_or_none()
+        if project is None:
+            return
+
+        if project.status == ProjectStatus.GENERATING:
+            project.set_status(ProjectStatus.REVIEW)
+            await fresh_db.commit()
+            log.info(
+                "project_transitioned_to_review",
+                project_id=str(project.id),
+            )
 
 
 async def generate_section(
@@ -161,7 +160,7 @@ async def generate_section(
                 cost_usd=float(ai_result.cost_usd) if ai_result.cost_usd else 0.0,
             )
 
-            await _check_all_sections_done(db, project_id)
+            await _check_all_sections_done(project_id)
 
             return {"status": "completed", "section_id": str(section.id)}
 
@@ -178,6 +177,6 @@ async def generate_section(
                 error=str(exc),
             )
 
-            await _check_all_sections_done(db, project_id)
+            await _check_all_sections_done(project_id)
 
             return {"status": "failed", "error": format_ai_error(exc)}

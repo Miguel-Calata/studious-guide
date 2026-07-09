@@ -51,11 +51,27 @@ export function ProjectDetailPage() {
     }
   }, [documents])
 
-  const { data: sections } = useSWR<CompendiumSection[]>(
+  const {
+    data: sections,
+    mutate: mutateSections,
+  } = useSWR<CompendiumSection[]>(
     id ? `/projects/${id}/sections` : null,
     () => getSections(id),
-    { revalidateOnFocus: false }
+    {
+      refreshInterval: () =>
+        project && isProjectBusy(project.status) ? POLL_INTERVAL_MS : 0,
+      revalidateOnFocus: false,
+    }
   )
+
+  const prevProjectRef = useRef(project?.status)
+  useEffect(() => {
+    const prev = prevProjectRef.current
+    prevProjectRef.current = project?.status
+    if (prev && project && isProjectBusy(prev) && !isProjectBusy(project.status)) {
+      mutateSections()
+    }
+  }, [project, mutateSections])
 
   if (projectError) {
     return (
@@ -75,6 +91,7 @@ export function ProjectDetailPage() {
   const refreshAll = () => {
     mutateProject()
     mutateDocs()
+    mutateSections()
   }
 
   const hasExtractedDocs = (documents ?? []).some(
