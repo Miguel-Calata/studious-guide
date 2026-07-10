@@ -10,7 +10,12 @@ from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.compendiums.dependencies import get_project_for_compendium
 from app.modules.notion.dependencies import get_notion_config
-from app.modules.notion.oauth_service import build_authorize_url, exchange_code, save_oauth_result
+from app.modules.notion.oauth_service import (
+    assert_oauth_configured,
+    build_authorize_url,
+    exchange_code,
+    save_oauth_result,
+)
 from app.modules.notion.oauth_state import (
     clear_state_cookie,
     issue_state,
@@ -62,6 +67,7 @@ async def oauth_start(
     The frontend should redirect the user's browser to the returned URL.
     Optional return_to is a relative path (e.g. /compendiums/slug) for post-OAuth redirect.
     """
+    assert_oauth_configured()
     state = issue_state(str(current_user.id), return_to=return_to)
     authorize_url = build_authorize_url(state)
     response = JSONResponse(content={"authorize_url": authorize_url})
@@ -72,28 +78,53 @@ async def oauth_start(
 @router.get("/notion/oauth/callback")
 async def oauth_callback(
     request: Request,
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
+    error_description: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
     """Handle the OAuth redirect from Notion.
 
     Validates state + cookie, exchanges the code for tokens, persists them,
     and redirects the browser back to the frontend.
+
+    code/state are optional so missing/error callbacks redirect to the SPA
+    instead of returning a FastAPI validation JSON on the API path.
     """
+    return_to = _DEFAULT_RETURN_TO
+
+    def _error_redirect(msg: str, path: str = _DEFAULT_RETURN_TO) -> RedirectResponse:
+        response = RedirectResponse(
+            url=_frontend_redirect(path, notion="error", msg=msg[:200]),
+            status_code=status.HTTP_302_FOUND,
+        )
+        clear_state_cookie(response)
+        return response
+
+    # Notion denied or sent an OAuth error.
+    if error:
+        msg = error_description or error or "Notion denegó la autorización"
+        return _error_redirect(msg)
+
+    if not code or not state:
+        return _error_redirect(
+            "OAuth incompleto: falta code o state. "
+            "Vuelve a pulsar «Añadir a Notion» o «Conectar con Notion»."
+        )
+
     # 1. Validate state (CSRF) — also extracts user_id and return_to.
-    user_id, return_to = verify_state(state, request)
+    try:
+        user_id, return_to = verify_state(state, request)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return _error_redirect(str(detail))
 
     # 2. Exchange code → token (uses HTTP Basic with client_id:client_secret).
     try:
         token_data = await exchange_code(code)
     except Exception as exc:
-        response = RedirectResponse(
-            url=_frontend_redirect(return_to, notion="error", msg=str(exc)[:200]),
-            status_code=status.HTTP_302_FOUND,
-        )
-        clear_state_cookie(response)
-        return response
+        return _error_redirect(str(exc)[:200], return_to)
 
     # 3. Look up the user.
     from sqlalchemy import select as sa_select
@@ -102,23 +133,13 @@ async def oauth_callback(
     result = await db.execute(sa_select(UserModel).where(UserModel.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
-        response = RedirectResponse(
-            url=_frontend_redirect(return_to, notion="error", msg="Usuario no encontrado"),
-            status_code=status.HTTP_302_FOUND,
-        )
-        clear_state_cookie(response)
-        return response
+        return _error_redirect("Usuario no encontrado", return_to)
 
     # 4. Persist tokens.
     try:
         await save_oauth_result(db, user, token_data)
     except Exception:
-        response = RedirectResponse(
-            url=_frontend_redirect(return_to, notion="error", msg="Error guardando tokens"),
-            status_code=status.HTTP_302_FOUND,
-        )
-        clear_state_cookie(response)
-        return response
+        return _error_redirect("Error guardando tokens", return_to)
 
     # 5. Clear state cookie and redirect to frontend.
     response = RedirectResponse(

@@ -25,12 +25,47 @@ class NotionTokenResponse:
     duplicated_template_id: str | None
 
 
+def resolve_oauth_redirect_uri() -> str:
+    """Public callback URL Notion must redirect to (via nginx on FRONTEND_URL)."""
+    if settings.notion_oauth_redirect_uri:
+        return settings.notion_oauth_redirect_uri.rstrip("/")
+    base = (settings.frontend_url or "").rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/api/v1/notion/oauth/callback"
+
+
+def assert_oauth_configured() -> None:
+    """Raise if Notion OAuth env vars are missing (avoids Notion opaque errors)."""
+    from fastapi import HTTPException, status
+
+    if not settings.notion_oauth_client_id or not settings.notion_oauth_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Notion OAuth no está configurado en el servidor. "
+                "Define NOTION_OAUTH_CLIENT_ID y NOTION_OAUTH_CLIENT_SECRET "
+                "y registra en Notion el Redirect URI: "
+                f"{resolve_oauth_redirect_uri() or '{FRONTEND_URL}/api/v1/notion/oauth/callback'}"
+            ),
+        )
+    if not resolve_oauth_redirect_uri():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Falta NOTION_OAUTH_REDIRECT_URI o FRONTEND_URL. "
+                "En producción: https://tu-dominio/api/v1/notion/oauth/callback"
+            ),
+        )
+
+
 def build_authorize_url(state: str) -> str:
     """Build the Notion OAuth authorize URL."""
+    assert_oauth_configured()
     params = {
         "owner": "user",
         "client_id": settings.notion_oauth_client_id,
-        "redirect_uri": settings.notion_oauth_redirect_uri,
+        "redirect_uri": resolve_oauth_redirect_uri(),
         "response_type": "code",
         "state": state,
     }
@@ -54,10 +89,10 @@ async def exchange_code(code: str) -> NotionTokenResponse:
                 "Content-Type": "application/json",
                 "Notion-Version": "2026-03-11",
             },
-            json={
+             json={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": settings.notion_oauth_redirect_uri,
+                "redirect_uri": resolve_oauth_redirect_uri(),
             },
             timeout=30.0,
         )

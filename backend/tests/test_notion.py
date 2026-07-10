@@ -216,11 +216,32 @@ async def test_oauth_start_returns_authorize_url(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_oauth_callback_invalid_state_returns_400(client, db_session):
-    response = await client.get(
-        "/api/v1/notion/oauth/callback?code=abc&state=bad",
-    )
-    assert response.status_code == 400
+async def test_oauth_callback_invalid_state_redirects_to_frontend(client, db_session):
+    mock_settings = _make_mock_settings()
+    with patch("app.modules.notion.router.settings", mock_settings), \
+         patch("app.modules.notion.oauth_state.settings", mock_settings):
+        response = await client.get(
+            "/api/v1/notion/oauth/callback?code=abc&state=bad",
+            follow_redirects=False,
+        )
+    assert response.status_code == 302
+    loc = response.headers["location"]
+    assert "notion=error" in loc
+    assert loc.startswith("http://localhost:5173/")
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_missing_params_redirects_to_frontend(client, db_session):
+    mock_settings = _make_mock_settings()
+    with patch("app.modules.notion.router.settings", mock_settings):
+        response = await client.get(
+            "/api/v1/notion/oauth/callback",
+            follow_redirects=False,
+        )
+    assert response.status_code == 302
+    loc = response.headers["location"]
+    assert "notion=error" in loc
+    assert "code" in loc or "OAuth" in loc or "msg=" in loc
 
 
 @pytest.mark.asyncio

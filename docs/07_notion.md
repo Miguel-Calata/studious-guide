@@ -39,18 +39,23 @@ Flujo OAuth:
 1. Ir a https://www.notion.so/my-integrations → **Create new integration** → tipo **Public integration**
 2. Rellenar:
    - **Name**: SAM Platform
-   - **Redirect URIs**: `https://<dominio>/api/v1/notion/oauth/callback` (y `http://localhost:8000/api/v1/notion/oauth/callback` para dev)
-3. Marcar **capabilities**:
-   - ✅ Read user information (including email addresses)
-   - ✅ Read content, Insert content, Update content
-   - ✅ Page metadata
-4. Copiar **OAuth client ID** (UUID) y **OAuth client secret** (`secret_...`)
-5. Configurar en `.env`:
-   ```
-   NOTION_OAUTH_CLIENT_ID=<client_id>
-   NOTION_OAUTH_CLIENT_SECRET=<client_secret>
-   NOTION_OAUTH_REDIRECT_URI=https://app.dominio/api/v1/notion/oauth/callback
-   ```
+    - **Redirect URIs** (exact match; same-origin vía nginx del frontend):
+      - Prod: `https://<tu-dominio>/api/v1/notion/oauth/callback`
+      - Local: `http://localhost:5173/api/v1/notion/oauth/callback`
+  3. Marcar **capabilities**:
+    - ✅ Read user information (including email addresses)
+    - ✅ Read content, Insert content, Update content
+    - ✅ Page metadata
+  4. Copiar **OAuth client ID** (UUID) y **OAuth client secret** (`secret_...`)
+  5. Configurar en el entorno del **backend** (Coolify / `.env`):
+    ```
+    FRONTEND_URL=https://tu-dominio
+    NOTION_OAUTH_CLIENT_ID=<client_id>
+    NOTION_OAUTH_CLIENT_SECRET=<client_secret>
+    # Opcional: si se omite, se usa {FRONTEND_URL}/api/v1/notion/oauth/callback
+    NOTION_OAUTH_REDIRECT_URI=https://tu-dominio/api/v1/notion/oauth/callback
+    ```
+    El `redirect_uri` enviado a Notion **debe coincidir carácter a carácter** con el registrado en la integración (mismo host, `https`, sin slash final de más).
 
 #### Endpoints OAuth
 
