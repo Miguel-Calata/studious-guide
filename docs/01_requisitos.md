@@ -69,7 +69,7 @@
 
 | ID | Requisito | Prioridad |
 |----|-----------|-----------|
-| RF-06.1 | Conectar cuenta de Notion vía API key (OAuth) | 🔴 MVP |
+| RF-06.1 | Conectar cuenta de Notion vía OAuth (Public Integration) | 🔴 MVP |
 | RF-06.2 | Seleccionar página/base de datos de destino en Notion | 🔴 MVP |
 | RF-06.3 | Publicar secciones individuales como páginas en Notion | 🔴 MVP |
 | RF-06.4 | Publicar compendio completo con estructura jerárquica automática | 🔴 MVP |

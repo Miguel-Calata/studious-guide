@@ -11,6 +11,7 @@ import { SectionEditor } from '@/components/sections/SectionEditor'
 import { mergeProject, generateProject, getSections } from '@/api/compendiums'
 import { getModels, type AiModel } from '@/api/ai'
 import { DEFAULT_MODEL } from '@/config/models'
+import { readModelPref, writeModelPref } from '@/lib/modelPrefs'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { isProjectBusy, POLL_INTERVAL_MS } from '@/lib/pipeline'
 import type { Project, ProjectStatus } from '@/types/project'
@@ -32,8 +33,12 @@ export function CompendiumCard({
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<CompendiumSection | null>(null)
   const [models, setModels] = useState<AiModel[]>([])
-  const [selectedGemini, setSelectedGemini] = useState<string>(DEFAULT_MODEL)
-  const [selectedClaude, setSelectedClaude] = useState<string>(DEFAULT_MODEL)
+  const [selectedGemini, setSelectedGemini] = useState<string>(() =>
+    readModelPref('gemini', DEFAULT_MODEL)
+  )
+  const [selectedClaude, setSelectedClaude] = useState<string>(() =>
+    readModelPref('claude', DEFAULT_MODEL)
+  )
 
   const { data: sections, mutate: mutateSections } = useSWR<CompendiumSection[]>(
     `/projects/${project.id}/sections`,
@@ -136,7 +141,10 @@ export function CompendiumCard({
             <select
               id="gemini-model"
               value={selectedGemini}
-              onChange={(e) => setSelectedGemini(e.target.value)}
+              onChange={(e) => {
+                setSelectedGemini(e.target.value)
+                writeModelPref('gemini', e.target.value)
+              }}
               className="rounded-md border bg-background px-2 py-1 text-sm"
             >
               {models.map((m) => (
@@ -153,7 +161,10 @@ export function CompendiumCard({
             <select
               id="claude-model"
               value={selectedClaude}
-              onChange={(e) => setSelectedClaude(e.target.value)}
+              onChange={(e) => {
+                setSelectedClaude(e.target.value)
+                writeModelPref('claude', e.target.value)
+              }}
               className="rounded-md border bg-background px-2 py-1 text-sm"
             >
               {models.map((m) => (

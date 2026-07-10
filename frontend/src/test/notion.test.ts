@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   getNotionStatus,
-  connectNotion,
+  startNotionOAuth,
+  disconnectNotion,
   searchNotionPages,
   updateNotionConfig,
   publishToNotion,
@@ -32,30 +33,41 @@ describe('api/notion', () => {
       expect(init?.method).toBe('GET')
       return ok({
         is_connected: true,
+        needs_reconnect: false,
         workspace_name: 'Mi workspace',
+        workspace_id: 'ws-001',
+        owner_email: 'dr@test.com',
+        connected_at: '2026-07-09T12:00:00Z',
         default_parent_page_id: 'abc',
       })
     })
     const res = await getNotionStatus()
     expect(res.is_connected).toBe(true)
     expect(res.workspace_name).toBe('Mi workspace')
+    expect(res.needs_reconnect).toBe(false)
+    expect(res.owner_email).toBe('dr@test.com')
   })
 
-  it('connectNotion hace POST con api_key', async () => {
+  it('startNotionOAuth hace GET a /notion/oauth/start', async () => {
     mockFetch((url, init) => {
-      expect(url).toBe('/api/v1/notion/connect')
-      expect(init?.method).toBe('POST')
-      expect(JSON.parse(init?.body as string)).toEqual({
-        api_key: 'secret_abc',
-      })
+      expect(url).toBe('/api/v1/notion/oauth/start')
+      expect(init?.method).toBe('GET')
       return ok({
-        is_connected: true,
-        workspace_name: 'WS',
-        default_parent_page_id: null,
+        authorize_url: 'https://api.notion.com/v1/oauth/authorize?client_id=cid&state=abc',
       })
     })
-    const res = await connectNotion('secret_abc')
-    expect(res.is_connected).toBe(true)
+    const res = await startNotionOAuth()
+    expect(res.authorize_url).toContain('api.notion.com/v1/oauth/authorize')
+  })
+
+  it('disconnectNotion hace POST a /notion/disconnect', async () => {
+    mockFetch((url, init) => {
+      expect(url).toBe('/api/v1/notion/disconnect')
+      expect(init?.method).toBe('POST')
+      return new Response(null, { status: 204 })
+    })
+    const res = await disconnectNotion()
+    expect(res).toBeUndefined()
   })
 
   it('searchNotionPages hace GET a /notion/search?q', async () => {
@@ -78,7 +90,11 @@ describe('api/notion', () => {
       })
       return ok({
         is_connected: true,
+        needs_reconnect: false,
         workspace_name: null,
+        workspace_id: null,
+        owner_email: null,
+        connected_at: null,
         default_parent_page_id: 'pid',
       })
     })

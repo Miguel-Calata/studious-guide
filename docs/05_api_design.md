@@ -286,13 +286,16 @@ document_type: bmj | guideline | article   (opcional, aplica a todos)
 
 ---
 
-### 📋 Notion (pendiente — Sprint 7)
+### 📋 Notion (OAuth — Sprint 8)
 
 | Método | Ruta | Descripción | Auth |
 |--------|------|-------------|------|
-| `POST` | `/notion/connect` | Conectar con Notion (guardar API key) | ✅ |
-| `GET` | `/notion/status` | Estado de la conexión | ✅ |
+| `GET` | `/notion/oauth/start` | Genera URL de autorización OAuth + state cookie | ✅ |
+| `GET` | `/notion/oauth/callback` | Callback de Notion (intercambia code→token, redirige al frontend) | ❌ (state JWT) |
+| `GET` | `/notion/status` | Estado de la conexión + needs_reconnect | ✅ |
+| `POST` | `/notion/disconnect` | Desconectar Notion (borra tokens) | ✅ |
 | `GET` | `/notion/search` | Buscar páginas/bases de datos en Notion | ✅ |
+| `PUT` | `/notion/config` | Actualizar página padre por defecto | ✅ |
 | `POST` | `/projects/{id}/publish/notion` | Publicar compendio en Notion | ✅ (creator) |
 
 ---

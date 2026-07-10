@@ -1,6 +1,7 @@
 import { api } from '@/api/client'
 import type {
   NotionStatusResponse,
+  NotionOAuthStartResponse,
   NotionSearchResult,
   PublishNotionResponse,
 } from '@/types/notion'
@@ -9,8 +10,12 @@ export function getNotionStatus(): Promise<NotionStatusResponse> {
   return api.get<NotionStatusResponse>('/notion/status')
 }
 
-export function connectNotion(apiKey: string): Promise<NotionStatusResponse> {
-  return api.post<NotionStatusResponse>('/notion/connect', { api_key: apiKey })
+export async function startNotionOAuth(): Promise<NotionOAuthStartResponse> {
+  return api.get<NotionOAuthStartResponse>('/notion/oauth/start')
+}
+
+export function disconnectNotion(): Promise<void> {
+  return api.post<void>('/notion/disconnect')
 }
 
 export function searchNotionPages(

@@ -79,7 +79,11 @@ function setup(overrides: { proj?: Partial<Project>; sections?: CompendiumSectio
         return new Response(
           JSON.stringify({
             is_connected: false,
+            needs_reconnect: false,
             workspace_name: null,
+            workspace_id: null,
+            owner_email: null,
+            connected_at: null,
             default_parent_page_id: null,
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -156,11 +160,12 @@ describe('PublishCard en ProjectDetailPage', () => {
     expect(await screen.findByText('Descargar .md')).toBeTruthy()
   })
 
-  it('muestra Notion no conectado y botón Conectar', async () => {
+  it('muestra Notion no conectado y botón OAuth', async () => {
     setup()
     renderPage()
-    expect(await screen.findByText('Conectar')).toBeTruthy()
-    expect(await screen.findByLabelText(/api key de notion/i)).toBeTruthy()
+    expect(await screen.findByText('Conectar con Notion')).toBeTruthy()
+    // No longer shows API key input
+    expect(screen.queryByLabelText(/api key de notion/i)).toBeNull()
   })
 
   it('muestra botón "Publicar" deshabilitado con menos de 11 secciones', async () => {

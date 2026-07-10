@@ -9,40 +9,22 @@ from app.models.notion_config import NotionConfig
 from app.models.project import Project, ProjectStatus
 from app.models.user import User
 from app.modules.notion.client import NotionClientWrapper
+from app.modules.notion.oauth_service import try_refresh_token
 from app.modules.notion.schemas import NotionConfigUpdate
 
 
-async def connect_notion(
-    db: AsyncSession,
-    user: User,
-    api_key: str,
-) -> NotionConfig:
-    """Validate the API key against Notion and store it encrypted."""
-    wrapper = NotionClientWrapper(api_key)
-    try:
-        workspace = await wrapper.validate_key()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"No se pudo conectar con Notion: {exc}",
-        ) from None
+def needs_reconnect(config: NotionConfig) -> bool:
+    """Check if the connection needs manual re-authentication.
 
-    result = await db.execute(
-        select(NotionConfig).where(NotionConfig.user_id == user.id)
-    )
-    config = result.scalar_one_or_none()
-
-    if config is None:
-        config = NotionConfig(user_id=str(user.id))
-        db.add(config)
-
-    config.api_key = api_key
-    config.workspace_name = workspace
-    config.is_connected = True
-
-    await db.commit()
-    await db.refresh(config)
-    return config
+    Returns True when the access token is expired (or about to expire) AND
+    no refresh token is available to recover it.
+    """
+    if not config.is_connected:
+        return False
+    if config.token_expires_at and config.token_expires_at < datetime.now(UTC):
+        if not config.refresh_token:
+            return True
+    return False
 
 
 async def get_notion_config(
@@ -77,12 +59,51 @@ async def update_notion_config(
     return config
 
 
+async def ensure_fresh_token(
+    db: AsyncSession,
+    config: NotionConfig,
+) -> None:
+    """Ensure the access token is not expired.
+
+    If expired and a refresh token exists, attempt to refresh.
+    If refresh fails, mark as disconnected and raise 409.
+    """
+    if not config.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay conexión con Notion",
+        )
+
+    if config.token_expires_at and config.token_expires_at < datetime.now(UTC):
+        success = await try_refresh_token(db, config)
+        if not success:
+            config.is_connected = False
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
+            )
+
+
 async def search_pages(
+    db: AsyncSession,
     config: NotionConfig,
     query: str,
 ) -> list[dict]:
+    await ensure_fresh_token(db, config)
     wrapper = NotionClientWrapper(config.api_key)
     return await wrapper.search(query)
+
+
+async def disconnect_notion(
+    db: AsyncSession,
+    user: User,
+) -> None:
+    """Disconnect Notion for the given user."""
+    config = await get_notion_config(db, user)
+    if config is not None:
+        config.clear_tokens()
+        await db.commit()
 
 
 async def publish_compendium_to_notion(
@@ -91,6 +112,8 @@ async def publish_compendium_to_notion(
     config: NotionConfig,
     parent_page_id: str | None = None,
 ) -> dict:
+    await ensure_fresh_token(db, config)
+
     if project.status not in (ProjectStatus.REVIEW, ProjectStatus.COMPLETED):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

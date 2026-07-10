@@ -143,10 +143,18 @@
 |---------|------|-------------|
 | `id` | UUID (PK) | |
 | `user_id` | UUID (FK → users) UNIQUE NOT NULL | Una config por usuario |
-| `api_key` | TEXT NOT NULL | API key de Notion (encriptada) |
+| `api_key_encrypted` | TEXT NOT NULL | Access token OAuth de Notion (encriptado con Fernet) |
+| `refresh_token_encrypted` | TEXT | Refresh token OAuth (encriptado) |
 | `workspace_name` | VARCHAR(255) | Nombre del workspace |
+| `workspace_id` | VARCHAR(64) | ID del workspace de Notion |
+| `bot_id` | VARCHAR(64) | ID del bot/integración en Notion |
+| `owner_user_id` | VARCHAR(64) | ID del usuario Notion que autorizó |
+| `owner_email` | VARCHAR(255) | Email del usuario Notion que autorizó |
 | `default_parent_page_id` | VARCHAR(255) | Página padre donde se crean los compendios |
 | `is_connected` | BOOLEAN DEFAULT FALSE | Estado de la conexión |
+| `token_expires_at` | TIMESTAMPTZ | Expiración del access token (NULL = indefinido) |
+| `connected_at` | TIMESTAMPTZ | Última vez que se conectó vía OAuth |
+| `last_refreshed_at` | TIMESTAMPTZ | Último refresh del access token |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ DEFAULT NOW() | |
 

@@ -114,10 +114,11 @@
 - No expone endpoints propios (uso interno)
 
 ### 8. Notion Module (`backend/app/modules/notion/`)
-- OAuth con Notion
+- OAuth 2.0 con Notion (Public Integration)
+- Intercambio code→token + refresh automático
 - Mapeo de secciones a páginas de Notion
 - Publicación con estructura jerárquica
-- Endpoints: `POST /notion/connect`, `GET /notion/databases`, `POST /projects/{id}/publish`
+- Endpoints: `GET /notion/oauth/start`, `GET /notion/oauth/callback`, `POST /notion/disconnect`, `GET /notion/status`, `GET /notion/search`, `PUT /notion/config`, `POST /projects/{id}/publish/notion`
 
 ### 9. Publishing Module (`backend/app/modules/publishing/`)
 - Subida de compendios finales a S3 (bucket público o pre-signed URLs)

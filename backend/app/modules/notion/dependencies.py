@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.notion_config import NotionConfig
 from app.modules.auth.dependencies import get_current_user
+from app.modules.notion.service import needs_reconnect
 
 
 async def get_notion_config(
@@ -24,5 +25,10 @@ async def get_notion_config(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="La conexión con Notion no está activa",
+        )
+    if needs_reconnect(config):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
         )
     return config

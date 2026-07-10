@@ -7,6 +7,7 @@ import { ProgressBar } from '@/components/pipeline/ProgressBar'
 import { extractAllForProject } from '@/api/extractions'
 import { getModels, type AiModel } from '@/api/ai'
 import { DEFAULT_MODEL } from '@/config/models'
+import { readModelPref, writeModelPref } from '@/lib/modelPrefs'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { documentStatusLabel } from '@/lib/pipeline'
 import type { ProjectStatus } from '@/types/project'
@@ -27,7 +28,9 @@ export function ExtractionCard({
 }) {
   const [busy, setBusy] = useState(false)
   const [models, setModels] = useState<AiModel[]>([])
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL)
+  const [selectedModel, setSelectedModel] = useState<string>(() =>
+    readModelPref('extraction', DEFAULT_MODEL)
+  )
 
   const canExtract = CAN_EXTRACT.includes(projectStatus)
   const completed = documents.filter((d) => d.status === 'extracted').length
@@ -82,7 +85,10 @@ export function ExtractionCard({
               <select
                 id="extract-model"
                 value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+                onChange={(e) => {
+                  setSelectedModel(e.target.value)
+                  writeModelPref('extraction', e.target.value)
+                }}
                 className="rounded-md border bg-background px-2 py-1 text-sm"
               >
                 {models.map((m) => (

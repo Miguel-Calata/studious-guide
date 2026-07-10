@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    # Notion OAuth (Public Integration)
+    notion_oauth_client_id: str = ""
+    notion_oauth_client_secret: str = ""
+    notion_oauth_redirect_uri: str = ""
+    notion_oauth_state_cookie_name: str = "notion_oauth_state"
+    notion_oauth_state_ttl_seconds: int = 300
+
     # Storage (PDFs)
     storage_backend: str = "local"
     pdf_storage_path: str = "/app/data/pdfs"

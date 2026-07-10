@@ -40,6 +40,12 @@ export function SectionEditor({
     if (open) setContent(section.content)
   }, [open, section.content])
 
+  useEffect(() => {
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [])
+
   const canRegenerate = REGENERABLE.includes(section.status)
 
   async function handleSave() {
@@ -97,6 +103,7 @@ export function SectionEditor({
               onChange={(v) => setContent(v ?? '')}
               preview="live"
               height={420}
+              overflow={false}
             />
           </Suspense>
         </div>

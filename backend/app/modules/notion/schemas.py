@@ -1,8 +1,8 @@
 from pydantic import BaseModel
 
 
-class NotionConnectRequest(BaseModel):
-    api_key: str
+class NotionOAuthStartResponse(BaseModel):
+    authorize_url: str
 
 
 class NotionConfigUpdate(BaseModel):
@@ -12,7 +12,11 @@ class NotionConfigUpdate(BaseModel):
 
 class NotionStatusResponse(BaseModel):
     is_connected: bool
+    needs_reconnect: bool = False
     workspace_name: str | None = None
+    workspace_id: str | None = None
+    owner_email: str | None = None
+    connected_at: str | None = None
     default_parent_page_id: str | None = None
 
 

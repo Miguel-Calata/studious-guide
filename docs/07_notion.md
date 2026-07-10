@@ -8,32 +8,64 @@ Publicar automáticamente los compendios generados como páginas estructuradas e
 
 ## 🔌 Conexión con Notion API
 
-### Método: API Key (Integration Token)
+### Método: OAuth Public Integration
 
-El usuario crea una integración interna en [notion.so/my-integrations](https://www.notion.so/my-integrations) y obtiene una API key.
+Cada usuario conecta **su propia cuenta de Notion** mediante OAuth 2.0, sin compartir API keys. El usuario autoriza la integración y selecciona las páginas a las que SAM puede acceder.
 
 ```
-Configuración en SAM Platform → Settings → Notion
-┌─────────────────────────────────────────────┐
-│  Notion API Key:  [ntn_xxxxxxxxxxxxxxx    ] │
-│                                              │
-│  [Conectar]                                  │
-│                                               │
-│  ✅ Conectado al workspace: "Clínica SAM"     │
-│  Página padre por defecto: [Seleccionar...]  │
-└─────────────────────────────────────────────┘
+Flujo OAuth:
+┌──────────┐     ┌──────────┐     ┌──────────────┐
+│ Frontend │────▶│ Backend  │────▶│  Notion API  │
+│          │     │ /start   │     │  /authorize   │
+└──────────┘     └──────────┘     └──────┬───────┘
+     ▲                                    │
+     │         ┌──────────┐               │ redirect
+     │◀────────│ Backend  │◀──────────────┘
+     │         │ /callback│     ?code=...&state=...
+     │         └────┬─────┘
+     │              │ POST /oauth/token
+     │              │ (HTTP Basic client_id:client_secret)
+     │              ▼
+     │         ┌──────────┐
+     │         │ Notion   │
+     │         │ API      │
+     │         └──────────┘
+     │
+     └── ?notion=connected (redirect al frontend)
 ```
 
-### Flujo OAuth (Fase futura)
+#### Pasos para configurar la integración pública en Notion
 
-Para multi-usuario sin compartir API keys, se implementará OAuth 2.0 de Notion:
-1. Usuario clickea "Conectar con Notion"
-2. Redirige a `api.notion.com/v1/oauth/authorize`
-3. Notion devuelve `code`
-4. Backend intercambia `code` por `access_token`
-5. Guarda token encriptado en `notion_configs`
+1. Ir a https://www.notion.so/my-integrations → **Create new integration** → tipo **Public integration**
+2. Rellenar:
+   - **Name**: SAM Platform
+   - **Redirect URIs**: `https://<dominio>/api/v1/notion/oauth/callback` (y `http://localhost:8000/api/v1/notion/oauth/callback` para dev)
+3. Marcar **capabilities**:
+   - ✅ Read user information (including email addresses)
+   - ✅ Read content, Insert content, Update content
+   - ✅ Page metadata
+4. Copiar **OAuth client ID** (UUID) y **OAuth client secret** (`secret_...`)
+5. Configurar en `.env`:
+   ```
+   NOTION_OAUTH_CLIENT_ID=<client_id>
+   NOTION_OAUTH_CLIENT_SECRET=<client_secret>
+   NOTION_OAUTH_REDIRECT_URI=https://app.dominio/api/v1/notion/oauth/callback
+   ```
 
-Para el MVP, API key manual es suficiente.
+#### Endpoints OAuth
+
+| Endpoint | Descripción |
+|----------|-------------|
+| `GET /notion/oauth/start` | Genera URL de autorización + state JWT (cookie efímera). El frontend redirige al usuario a esa URL |
+| `GET /notion/oauth/callback` | Recibe `code` + `state` de Notion, intercambia por tokens, guarda en BD, redirige al frontend |
+| `POST /notion/disconnect` | Borra tokens y marca como desconectado |
+| `GET /notion/status` | Devuelve estado, `needs_reconnect` si el token expiró sin refresh posible |
+
+#### Seguridad del state OAuth
+
+- El `state` es un JWT firmado con `SECRET_KEY` que contiene `{sub: user_id, nonce, exp}`.
+- Se setea una cookie httpOnly efímera (5 min) con el mismo valor.
+- En el callback se valida que el JWT sea válido y que coincida con la cookie (protección CSRF + anti-replay).
 
 ---
 

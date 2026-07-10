@@ -1,5 +1,6 @@
 import io
-from unittest.mock import AsyncMock, patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select, update
@@ -9,6 +10,29 @@ from app.models.extraction import Extraction, ExtractionStatus
 from app.models.notion_config import NotionConfig
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+
+
+def _make_mock_settings(**overrides):
+    """Create a mock settings object with sensible defaults for Notion OAuth tests."""
+    defaults = {
+        "notion_oauth_client_id": "test-client-id",
+        "notion_oauth_client_secret": "test-client-secret",
+        "notion_oauth_redirect_uri": "http://localhost:8000/api/v1/notion/oauth/callback",
+        "notion_oauth_state_cookie_name": "notion_oauth_state",
+        "notion_oauth_state_ttl_seconds": 300,
+        "cookie_secure": False,
+        "cookie_samesite": "lax",
+        "cookie_domain": None,
+        "secret_key": "test-secret-key-for-oauth",
+        "access_token_expire_minutes": 60,
+        "refresh_token_expire_days": 7,
+    }
+    defaults.update(overrides)
+    mock = MagicMock()
+    for k, v in defaults.items():
+        setattr(mock, k, v)
+    return mock
+from app.modules.notion.oauth_state import issue_state
 
 
 async def _register_and_login(client, email: str, password: str = "Test1234"):
@@ -134,73 +158,136 @@ async def _setup_compendium(client, token, project_id, db_session):
     await db_session.commit()
 
 
-async def _create_notion_config(db_session, user_id: str, connected: bool = True):
-    config = NotionConfig(
-        user_id=user_id,
-        api_key="ntn_test_key_12345",
-        workspace_name="Test Workspace",
-        default_parent_page_id="parent-page-123",
-        is_connected=connected,
-    )
+async def _create_notion_config(
+    db_session,
+    user_id: str,
+    connected: bool = True,
+    with_refresh: bool = True,
+    expired: bool = False,
+):
+    config = NotionConfig(user_id=user_id)
+    config.access_token = "ntn_oauth_access_token_12345"
+    if with_refresh:
+        config.refresh_token = "ntn_oauth_refresh_token_67890"
+    config.workspace_name = "Test Workspace"
+    config.workspace_id = "ws-001"
+    config.bot_id = "bot-001"
+    config.owner_user_id = "notion-user-001"
+    config.owner_email = "dr@test.com"
+    config.default_parent_page_id = "parent-page-123"
+    config.is_connected = connected
+    config.connected_at = datetime.now(timezone.utc)
+    config.last_refreshed_at = datetime.now(timezone.utc)
+    if expired:
+        config.token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    else:
+        config.token_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     db_session.add(config)
     await db_session.commit()
     await db_session.refresh(config)
     return config
 
 
+# ─── OAuth Start ───
+
+
 @pytest.mark.asyncio
-async def test_connect_valid_key(client, db_session):
-    token = await _register_and_login(client, "notion-connect@test.com")
+async def test_oauth_start_returns_authorize_url(client, db_session):
+    token = await _register_and_login(client, "notion-oauth-start@test.com")
+    mock_settings = _make_mock_settings()
 
-    with patch(
-        "app.modules.notion.service.NotionClientWrapper"
-    ) as mock_wrapper_cls:
-        mock_wrapper = mock_wrapper_cls.return_value
-        mock_wrapper.validate_key = AsyncMock(return_value="Mi Workspace")
-
-        response = await client.post(
-            "/api/v1/notion/connect",
-            json={"api_key": "ntn_valid_key"},
+    with patch("app.modules.notion.oauth_state.settings", mock_settings):
+        response = await client.get(
+            "/api/v1/notion/oauth/start",
             headers={"Authorization": f"Bearer {token}"},
         )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["is_connected"] is True
-    assert data["workspace_name"] == "Mi Workspace"
+    assert "authorize_url" in data
+    assert "api.notion.com/v1/oauth/authorize" in data["authorize_url"]
+    assert "client_id=test-client-id" in data["authorize_url"]
+    assert "state=" in data["authorize_url"]
 
-    from app.modules.auth.service import decode_access_token
 
-    user_id = decode_access_token(token)
-    result = await db_session.execute(
-        select(NotionConfig).where(NotionConfig.user_id == user_id)
-    )
-    # Verify it was saved encrypted (raw DB value != plaintext)
-    configs = list(result.scalars().all())
-    assert len(configs) == 1
-    assert configs[0].api_key_encrypted != "ntn_valid_key"
-    assert configs[0].api_key == "ntn_valid_key"  # decryption works
+# ─── OAuth Callback ───
 
 
 @pytest.mark.asyncio
-async def test_connect_invalid_key(client, db_session):
-    token = await _register_and_login(client, "notion-invalid@test.com")
+async def test_oauth_callback_invalid_state_returns_400(client, db_session):
+    response = await client.get(
+        "/api/v1/notion/oauth/callback?code=abc&state=bad",
+    )
+    assert response.status_code == 400
 
-    with patch(
-        "app.modules.notion.service.NotionClientWrapper"
-    ) as mock_wrapper_cls:
-        mock_wrapper = mock_wrapper_cls.return_value
-        mock_wrapper.validate_key = AsyncMock(
-            side_effect=Exception("Unauthorized")
+
+@pytest.mark.asyncio
+async def test_oauth_callback_success_persists_tokens(client, db_session):
+    token = await _register_and_login(client, "notion-oauth-cb@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    mock_settings = _make_mock_settings()
+    state = issue_state(user_id)
+
+    mock_token_response = {
+        "access_token": "ntn_new_access",
+        "refresh_token": "ntn_new_refresh",
+        "token_type": "bearer",
+        "workspace_id": "ws-new",
+        "workspace_name": "Mi Workspace",
+        "workspace_icon": None,
+        "bot_id": "bot-new",
+        "owner": {
+            "type": "user",
+            "user": {
+                "id": "notion-uid",
+                "object": "user",
+                "name": "Dr. Test",
+                "avatar_url": None,
+                "type": "person",
+                "person": {"email": "dr@test.com"},
+            },
+        },
+        "duplicated_template_id": None,
+        "request_id": "req-123",
+    }
+
+    with patch("app.modules.notion.oauth_state.settings", mock_settings), \
+         patch("app.modules.notion.oauth_service.settings", mock_settings), \
+         patch(
+             "app.modules.notion.oauth_service.httpx.AsyncClient"
+         ) as mock_client_cls:
+        mock_http = AsyncMock()
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_token_response
+        mock_http.post = AsyncMock(return_value=mock_resp)
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=False)
+        mock_client_cls.return_value = mock_http
+
+        client.cookies.set("notion_oauth_state", state)
+        response = await client.get(
+            f"/api/v1/notion/oauth/callback?code=authcode&state={state}",
+            follow_redirects=False,
         )
 
-        response = await client.post(
-            "/api/v1/notion/connect",
-            json={"api_key": "bad_key"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
+    assert response.status_code == 302
+    assert "notion=connected" in response.headers["location"]
 
-    assert response.status_code == 401
+    result = await db_session.execute(
+        select(NotionConfig).where(NotionConfig.user_id == user_id)
+    )
+    config = result.scalar_one_or_none()
+    assert config is not None
+    assert config.is_connected is True
+    assert config.access_token == "ntn_new_access"
+    assert config.refresh_token == "ntn_new_refresh"
+    assert config.workspace_id == "ws-new"
+
+
+# ─── Status ───
 
 
 @pytest.mark.asyncio
@@ -220,12 +307,13 @@ async def test_status_connected(client, db_session):
     assert data["is_connected"] is True
     assert data["workspace_name"] == "Test Workspace"
     assert data["default_parent_page_id"] == "parent-page-123"
+    assert data["needs_reconnect"] is False
+    assert data["owner_email"] == "dr@test.com"
 
 
 @pytest.mark.asyncio
 async def test_status_disconnected(client, db_session):
     token = await _register_and_login(client, "notion-status-disc@test.com")
-    # No config exists
     response = await client.get(
         "/api/v1/notion/status",
         headers={"Authorization": f"Bearer {token}"},
@@ -233,6 +321,55 @@ async def test_status_disconnected(client, db_session):
     assert response.status_code == 200
     data = response.json()
     assert data["is_connected"] is False
+    assert data["needs_reconnect"] is False
+
+
+@pytest.mark.asyncio
+async def test_status_needs_reconnect_when_expired_no_refresh(client, db_session):
+    token = await _register_and_login(client, "notion-reconnect@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(
+        db_session, user_id, connected=True, with_refresh=False, expired=True
+    )
+
+    response = await client.get(
+        "/api/v1/notion/status",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_connected"] is True
+    assert data["needs_reconnect"] is True
+
+
+# ─── Disconnect ───
+
+
+@pytest.mark.asyncio
+async def test_disconnect_clears_tokens(client, db_session):
+    token = await _register_and_login(client, "notion-disconnect@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(db_session, user_id, connected=True)
+
+    response = await client.post(
+        "/api/v1/notion/disconnect",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 204
+
+    result = await db_session.execute(
+        select(NotionConfig).where(NotionConfig.user_id == user_id)
+    )
+    config = result.scalar_one()
+    assert config.is_connected is False
+    assert config.refresh_token_encrypted is None
+
+
+# ─── Search ───
 
 
 @pytest.mark.asyncio
@@ -263,6 +400,9 @@ async def test_search_pages(client, db_session):
     results = response.json()
     assert len(results) == 2
     assert results[0]["title"] == "Compendios SAM"
+
+
+# ─── Publish ───
 
 
 @pytest.mark.asyncio
@@ -298,7 +438,6 @@ async def test_publish_creates_pages(client, db_session):
     assert len(data["sections_published"]) == 11
     assert "compendium_page_id" in data
 
-    # Verify notion_page_id was saved on sections
     result = await db_session.execute(
         select(CompendiumSection).where(
             CompendiumSection.project_id == project_id
@@ -319,7 +458,6 @@ async def test_publish_updates_existing(client, db_session):
     project_id = await _create_project(client, token, "Republish Test")
     await _setup_compendium(client, token, project_id, db_session)
 
-    # Pre-set notion_page_id on sections to simulate prior publish
     result = await db_session.execute(
         select(CompendiumSection).where(
             CompendiumSection.project_id == project_id
@@ -352,9 +490,7 @@ async def test_publish_updates_existing(client, db_session):
         )
 
     assert response.status_code == 200
-    # Root page created once (new)
     assert len(create_called) == 1
-    # 11 sections updated (not created)
     assert len(update_called) == 11
     assert all(p.startswith("existing-page-") for p in update_called)
 
@@ -362,7 +498,6 @@ async def test_publish_updates_existing(client, db_session):
 @pytest.mark.asyncio
 async def test_publish_fails_without_connection(client, db_session):
     token = await _register_and_login(client, "notion-noconn@test.com")
-    # No config
     project_id = await _create_project(client, token)
     await _setup_compendium(client, token, project_id, db_session)
 
@@ -371,3 +506,79 @@ async def test_publish_fails_without_connection(client, db_session):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_publish_auto_refreshes_expired_token(client, db_session):
+    token = await _register_and_login(client, "notion-refresh@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(
+        db_session, user_id, connected=True, with_refresh=True, expired=True
+    )
+    project_id = await _create_project(client, token, "Refresh Test")
+    await _setup_compendium(client, token, project_id, db_session)
+
+    mock_refresh_response = {
+        "access_token": "ntn_refreshed_access",
+        "refresh_token": "ntn_new_refresh",
+        "token_type": "bearer",
+        "workspace_id": "ws-001",
+        "workspace_name": "Test Workspace",
+        "workspace_icon": None,
+        "bot_id": "bot-001",
+        "owner": {
+            "type": "user",
+            "user": {
+                "id": "notion-uid",
+                "object": "user",
+                "name": "Dr. Test",
+                "avatar_url": None,
+                "type": "person",
+                "person": {"email": "dr@test.com"},
+            },
+        },
+        "duplicated_template_id": None,
+        "request_id": "req-123",
+    }
+
+    with patch(
+        "app.modules.notion.service.NotionClientWrapper"
+    ) as mock_wrapper_cls, \
+        patch(
+            "app.modules.notion.oauth_service.settings"
+        ) as mock_oauth_settings, \
+        patch(
+            "app.modules.notion.oauth_service.httpx.AsyncClient"
+        ) as mock_client_cls:
+        mock_wrapper = mock_wrapper_cls.return_value
+        mock_wrapper.create_page = AsyncMock(
+            side_effect=lambda parent_page_id, title, content_markdown: "page-new"
+        )
+
+        mock_oauth_settings.notion_oauth_client_id = "cid"
+        mock_oauth_settings.notion_oauth_client_secret = "csecret"
+
+        mock_http = AsyncMock()
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_refresh_response
+        mock_http.post = AsyncMock(return_value=mock_resp)
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=False)
+        mock_client_cls.return_value = mock_http
+
+        response = await client.post(
+            f"/api/v1/projects/{project_id}/publish/notion",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+
+    result = await db_session.execute(
+        select(NotionConfig).where(NotionConfig.user_id == user_id)
+    )
+    config = result.scalar_one()
+    assert config.access_token == "ntn_refreshed_access"
+    assert config.last_refreshed_at is not None

@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ExternalLink, Globe, Loader2, NotepadText, Search } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { ExternalLink, Globe, Loader2, NotepadText, Search, Unlink } from 'lucide-react'
 import useSWR from 'swr'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,7 +12,8 @@ import { Label } from '@/components/ui/label'
 import { publishProject } from '@/api/publishing'
 import {
   getNotionStatus,
-  connectNotion,
+  startNotionOAuth,
+  disconnectNotion,
   searchNotionPages,
   updateNotionConfig,
   publishToNotion,
@@ -177,6 +178,22 @@ function NotionPublishSection({
     { revalidateOnFocus: false }
   )
 
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Handle OAuth callback redirect ?notion=connected or ?notion=error
+  useEffect(() => {
+    const notionParam = searchParams.get('notion')
+    if (notionParam === 'connected') {
+      notifySuccess('Notion conectado correctamente')
+      mutateNotion()
+      setSearchParams({}, { replace: true })
+    } else if (notionParam === 'error') {
+      const msg = searchParams.get('msg') ?? 'Error al conectar con Notion'
+      notifyError(new Error(msg))
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, setSearchParams, mutateNotion])
+
   if (!notionStatus) {
     return (
       <div className="space-y-3">
@@ -205,29 +222,24 @@ function NotionPublishSection({
           onStatusChange={mutateNotion}
         />
       ) : (
-        <NotionConnectBlock onConnected={() => mutateNotion()} />
+        <NotionConnectBlock />
       )}
     </div>
   )
 }
 
-/* ─── Conectar Notion ─── */
+/* ─── Conectar Notion (OAuth) ─── */
 
-function NotionConnectBlock({ onConnected }: { onConnected: () => void }) {
-  const [apiKey, setApiKey] = useState('')
+function NotionConnectBlock() {
   const [loading, setLoading] = useState(false)
 
   const handleConnect = async () => {
-    if (!apiKey.trim()) return
     setLoading(true)
     try {
-      await connectNotion(apiKey.trim())
-      notifySuccess('Notion conectado correctamente')
-      setApiKey('')
-      onConnected()
+      const { authorize_url } = await startNotionOAuth()
+      window.location.href = authorize_url
     } catch (err) {
       notifyError(err)
-    } finally {
       setLoading(false)
     }
   }
@@ -235,31 +247,12 @@ function NotionConnectBlock({ onConnected }: { onConnected: () => void }) {
   return (
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground">
-        Conecta tu cuenta de Notion para publicar compendios directamente.
+        Conecta tu cuenta de Notion para publicar compendios directamente en tu workspace.
       </p>
-      <div className="flex items-end gap-2">
-        <div className="flex-1 space-y-1">
-          <Label htmlFor="notion-api-key" className="text-xs">
-            API key de Notion
-          </Label>
-          <Input
-            id="notion-api-key"
-            type="password"
-            placeholder="secret_..."
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
-          />
-        </div>
-        <Button
-          size="sm"
-          disabled={!apiKey.trim() || loading}
-          onClick={handleConnect}
-        >
-          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Conectar
-        </Button>
-      </div>
+      <Button size="sm" disabled={loading} onClick={handleConnect}>
+        {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        Conectar con Notion
+      </Button>
     </div>
   )
 }
@@ -284,6 +277,7 @@ function NotionConnectedBlock({
   const [parentPageId, setParentPageId] = useState(status.default_parent_page_id ?? '')
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
 
   const { data: searchResults } = useSWR(
     showSearch && searchQuery.length >= 2
@@ -320,16 +314,61 @@ function NotionConnectedBlock({
     }
   }
 
+  const handleDisconnect = async () => {
+    setDisconnecting(true)
+    try {
+      await disconnectNotion()
+      notifySuccess('Notion desconectado')
+      onStatusChange()
+    } catch (err) {
+      notifyError(err)
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Badge variant="success">Conectado</Badge>
-        {status.workspace_name && (
-          <span className="text-sm text-muted-foreground">
-            {status.workspace_name}
-          </span>
-        )}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {status.needs_reconnect ? (
+            <Badge variant="destructive">Sesión expirada</Badge>
+          ) : (
+            <Badge variant="success">Conectado</Badge>
+          )}
+          {status.workspace_name && (
+            <span className="text-sm text-muted-foreground">
+              {status.workspace_name}
+            </span>
+          )}
+          {status.owner_email && (
+            <span className="text-xs text-muted-foreground">
+              ({status.owner_email})
+            </span>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-xs h-7 px-2 text-destructive hover:text-destructive"
+          disabled={disconnecting}
+          onClick={handleDisconnect}
+        >
+          {disconnecting ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <Unlink className="mr-1 h-3 w-3" />
+          )}
+          Desconectar
+        </Button>
       </div>
+
+      {status.needs_reconnect && (
+        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          Tu sesión de Notion ha expirado. Desconecta y vuelve a conectar para
+          seguir publicando.
+        </div>
+      )}
 
       {/* Selector de página padre */}
       <div className="space-y-2">
@@ -399,7 +438,7 @@ function NotionConnectedBlock({
       {/* Botón publicar */}
       <div className="flex flex-wrap items-center gap-2">
         <Button
-          disabled={!canPublish || publishing}
+          disabled={!canPublish || publishing || status.needs_reconnect}
           onClick={handlePublish}
         >
           {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
