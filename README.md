@@ -15,27 +15,15 @@ PDFs de guías (KDIGO, BMJ, NICE, ...)  →  OpenRouter (Gemini + Claude)  →  
 ```
 ProyectoJorge/
 ├── docs/                    ← Documentación de arquitectura y decisiones
-│   ├── 00_vision.md
-│   ├── 01_requisitos.md
-│   ├── 02_arquitectura.md
-│   ├── 03_stack_tecnologico.md
-│   ├── 04_modelo_datos.md
-│   ├── 05_api_design.md
-│   ├── 06_modulos.md
-│   ├── 07_notion.md
-│   ├── 08_prompt_engine.md
-│   ├── 09_pipeline_ia.md
-│   ├── 10_deployment.md
-│   ├── 11_changelog.md
-│   └── 12_roadmap_sprints.md
-│
 ├── memory/                  ← Documentación original del Dr. Jorge (referencia)
-│   ├── NUEVO - IA -.md      ← Especificación completa del sistema SAM
-│   └── scripts/             ← Scripts legacy (sam_v8, sam_v9, unir)
-│
 ├── backend/                 ← API y lógica de negocio (FastAPI + Python)
 ├── frontend/                ← Interfaz web (React + TypeScript)
-├── docker/                  ← Configuración de despliegue (compose, Dockerfiles, nginx)
+├── docker/                  ← Dockerfiles + nginx
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   └── nginx.frontend.conf
+├── docker-compose.yml       ← Stack completo (Coolify / local)
+├── .env.example             ← Variables para Compose / Coolify
 └── .gitignore
 ```
 
@@ -44,104 +32,90 @@ ProyectoJorge/
 | Capa | Tecnología |
 |------|-----------|
 | Backend | FastAPI (Python 3.12), SQLAlchemy 2.0, ARQ + Redis |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui, marked.js (servido por nginx en contenedor) |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui (nginx en prod) |
 | Base de datos | PostgreSQL 16 |
 | Cache/Queue | Redis 7 |
-| AI Gateway | OpenRouter API (Gemini 2.5 Pro, Claude 3.5 Sonnet, +200 modelos) |
-| Almacenamiento | AWS S3 (compendios .md públicos) / MinIO (desarrollo local) |
-| Despliegue | Docker Compose, Nginx, GitHub Actions |
+| AI Gateway | OpenRouter API |
+| Almacenamiento | AWS S3 (prod) / MinIO opcional (`--profile local`) |
+| Despliegue | Docker Compose + Coolify (Traefik TLS) |
 | Target | Ubuntu 24.04 VPS |
 
 ## 📋 Requisitos Previos
 
-- Python 3.12+
-- Node.js 20+
 - Docker + Docker Compose
-- PostgreSQL 16 (o usar el contenedor)
-- API Keys: OpenRouter + Notion
+- API Keys: OpenRouter (+ Notion OAuth si se usa)
+- Bucket S3 (producción)
+- Para dev sin Docker: Python 3.12+, Node.js 20+
 
 ## ⚡ Inicio Rápido
 
-### Opción A: Docker Compose (Recomendado)
+### Opción A: Docker Compose (recomendado)
 
 ```bash
-# 1. Clonar
 git clone <repo-url>
 cd ProyectoJorge
 
-# 2. Configurar variables
-cd docker
-cp .env.docker.example .env
-# Editar .env con tus API keys
+cp .env.example .env
+# Editar .env: SECRET_KEY, POSTGRES_PASSWORD, OPENROUTER_API_KEY, FRONTEND_URL, S3_*
 
-# 3. Levantar todo
-docker compose up --build
+# Producción / stack base (sin MinIO)
+docker compose up --build -d
 
-# API disponible en http://localhost:8000
-# Swagger UI en http://localhost:8000/docs
-# Frontend (build estático en nginx) en http://localhost:5173  ← proxy /api/v1 al backend
+# Desarrollo local con MinIO
+docker compose --profile local up --build
 ```
 
-> ⚠️ **Tras cambiar código en `backend/`**, reconstuye siempre la imagen:
-> `docker compose up --build backend worker`. Si no, el contenedor seguirá
-> corriendo el binario anterior (ver incidente "Not authenticated" en `docs/11_changelog.md`).
+- Frontend (nginx + proxy API): http://localhost:5173
+- API health (vía nginx): http://localhost:5173/api/v1/health
+- Backend no se publica al host en prod (solo red interna Docker)
 
-> **Nota de producción:** el servicio `frontend` construye la SPA y la sirve con nginx,
-> haciendo proxy de `/api/v1` al backend en la misma red Docker. Esto evita problemas de
-> CORS y permite cookies httpOnly de auth bajo el mismo origen. En Coolify basta con apuntar
-> el proyecto al directorio `docker/` y exponer el puerto del frontend.
+> Tras cambiar código en `backend/`, reconstruye: `docker compose up --build backend worker`.
 
-### Opción B: Desarrollo Local (sin Docker)
+### Opción B: Desarrollo local (sin Docker)
 
 ```bash
-# 1. Clonar
-git clone <repo-url>
-cd ProyectoJorge
-
-# 2. Backend
+# Backend
 cd backend
-python -m venv venv
-source venv/bin/activate
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # Configurar API keys y DATABASE_URL
+cp .env.example .env
 alembic upgrade head
 uvicorn app.main:app --reload
 
-# 3. Frontend (otra terminal)
-cd frontend
-npm install
-npm run dev
-# Disponible en http://localhost:5173 (proxy a :8000 en /api/v1)
+# Frontend
+cd frontend && npm install && npm run dev
 
-# 4. Workers (otra terminal)
-cd backend
-arq app.workers.WorkerSettings --watch
+# Workers
+cd backend && arq app.workers.WorkerSettings --watch
 ```
 
-### Despliegue en Coolify (VPS)
+### Despliegue en Coolify
 
 1. Subir el repo a GitHub/GitLab
-2. Crear proyecto en Coolify → Docker Compose
-3. Apuntar al directorio `docker/`
-4. Configurar variables de entorno en el dashboard de Coolify
-5. Deploy one-click
+2. Coolify → **New Resource** → **Docker Compose**
+3. Apuntar al repo (detecta `docker-compose.yml` en la raíz)
+4. Configurar variables del `.env.example` en el dashboard
+5. Asignar el dominio **solo al servicio `frontend`** (puerto contenedor 80)
+6. Deploy
+
+**Variables mínimas en Coolify:**
+
+| Variable | Ejemplo |
+|----------|---------|
+| `POSTGRES_PASSWORD` | secreto fuerte |
+| `SECRET_KEY` | `openssl rand -hex 32` |
+| `OPENROUTER_API_KEY` | `sk-or-v1-...` |
+| `FRONTEND_URL` | `https://tu-dominio` |
+| `COOKIE_SECURE` | `true` |
+| `STORAGE_BACKEND` | `s3` |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | credenciales AWS u otro S3 |
+| `NOTION_OAUTH_REDIRECT_URI` | `https://tu-dominio/api/v1/notion/oauth/callback` |
+
+Un solo dominio: nginx en `frontend` hace proxy de `/api/v1` y `/public` al backend. No hace falta exponer el servicio `backend`.
 
 ## 📖 Documentación
 
-Toda la documentación del proyecto está en la carpeta [`docs/`](docs/). Se recomienda leer en orden:
-
-1. [Visión del proyecto](docs/00_vision.md)
-2. [Requisitos](docs/01_requisitos.md)
-3. [Arquitectura](docs/02_arquitectura.md)
-4. [Stack tecnológico](docs/03_stack_tecnologico.md)
-5. [Modelo de datos](docs/04_modelo_datos.md)
-6. [Diseño de API](docs/05_api_design.md)
-7. [Módulos](docs/06_modulos.md)
-8. [Integración Notion](docs/07_notion.md)
-9. [Prompt Engine](docs/08_prompt_engine.md)
-10. [Pipeline IA](docs/09_pipeline_ia.md)
-11. [Despliegue](docs/10_deployment.md)
-12. [Changelog](docs/11_changelog.md)
+Ver [`docs/`](docs/), en especial [Despliegue](docs/10_deployment.md).
 
 ## 🔐 Licencia
 

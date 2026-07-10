@@ -1,0 +1,47 @@
+# Build context: repo root
+.git
+**/.git
+**/.DS_Store
+
+# Env / secrets
+.env
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+**/.ruff_cache
+**/venv
+backend/venv
+backend/.pytest_cache
+backend/.ruff_cache
+backend/tests
+backend/data
+backend/uploads
+
+# Node / frontend (Dockerfile.frontend copies package files first)
+frontend/node_modules
+frontend/dist
+frontend/.env
+frontend/.env.*
+
+# Docs & local-only
+docs
+memory
+*.md
+!frontend/README.md
+
+# Docker / IDE
+docker/ssl
+.vscode
+.idea
+*.log
+logs
+data
+*.sql.gz

@@ -95,43 +95,21 @@ pytest-asyncio==0.24.*
 
 ### Docker Compose (Coolify-compatible)
 
-Un solo `docker-compose.yml` sirve para local y Coolify. Incluye PostgreSQL, Redis, backend, worker ARQ y MinIO para S3 local.
+`docker-compose.yml` en la **raíz del repo**. Servicios: PostgreSQL, Redis, backend, worker, frontend (nginx). MinIO solo con `--profile local`. Prod usa S3 real.
 
 ```yaml
 services:
   postgres:    # PostgreSQL 16 Alpine
   redis:       # Redis 7 Alpine
-  backend:     # FastAPI + Alembic migrations on startup
+  backend:     # FastAPI + Alembic on startup (interno)
   worker:      # ARQ worker
-  minio:       # S3-compatible storage para compendios
+  frontend:    # nginx SPA + proxy /api → backend (dominio público)
+  minio:       # profile: local
 ```
 
-**Variables clave:**
-```env
-POSTGRES_USER=sam
-POSTGRES_PASSWORD=sam
-POSTGRES_DB=sam_platform
-DATABASE_URL=postgresql+asyncpg://sam:sam@postgres:5432/sam_platform
-REDIS_URL=redis://redis:6379/0
-SECRET_KEY=<random-secret>
-OPENROUTER_API_KEY=<key>
+**Variables clave:** ver `.env.example` en la raíz (`SECRET_KEY`, `FRONTEND_URL`, `COOKIE_SECURE`, `S3_*`, etc.).
 
-# Storage
-S3_ENDPOINT=http://minio:9000
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_BUCKET=compendiums
-S3_REGION=us-east-1
-S3_USE_SSL=false
-
-# Backend
-DEBUG=false
-UVICORN_RELOAD=          # vacío en prod, "true" en local
-BACKEND_PORT=8000
-BACKEND_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
-```
-
-**Coolify:** Configurar como proyecto Docker Compose, apuntar al repo, setear variables de entorno en el dashboard. Coolify se encarga de health checks, restarts y proxy reverso.
+**Coolify:** Docker Compose, domain solo en `frontend` (puerto 80). Detalle en `docs/10_deployment.md`.
 
 ---
 
@@ -152,11 +130,12 @@ BACKEND_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 
 ```
 ProyectoJorge/
+├── docker-compose.yml            # Stack Coolify / local (raíz)
+├── .env.example                  # Template Compose / Coolify
 ├── docker/
-│   ├── docker-compose.yml        # 5 servicios: postgres, redis, backend, worker, minio
-│   ├── Dockerfile.backend        # Compartido por backend y worker
-│   ├── .env                      # Variables de entorno (no commitear)
-│   └── .env.docker.example       # Template para .env
+│   ├── Dockerfile.backend        # Context raíz; compartido backend + worker
+│   ├── Dockerfile.frontend       # Multi-stage Node → nginx
+│   └── nginx.frontend.conf       # SPA + proxy API
 │
 ├── backend/
 │   ├── app/
