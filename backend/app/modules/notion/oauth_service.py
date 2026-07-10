@@ -23,6 +23,7 @@ class NotionTokenResponse:
     bot_id: str
     owner: dict
     duplicated_template_id: str | None
+    expires_in: int | None = None
 
 
 def resolve_oauth_redirect_uri() -> str:
@@ -125,6 +126,7 @@ async def exchange_code(code: str) -> NotionTokenResponse:
         bot_id=data["bot_id"],
         owner=owner_info,
         duplicated_template_id=data.get("duplicated_template_id"),
+        expires_in=data.get("expires_in"),
     )
 
 
@@ -177,6 +179,7 @@ async def refresh_access_token(refresh_token: str) -> NotionTokenResponse:
         bot_id=data["bot_id"],
         owner=owner_info,
         duplicated_template_id=data.get("duplicated_template_id"),
+        expires_in=data.get("expires_in"),
     )
 
 
@@ -205,7 +208,10 @@ async def save_oauth_result(
     config.is_connected = True
     config.connected_at = datetime.now(timezone.utc)
     config.last_refreshed_at = datetime.now(timezone.utc)
-    config.token_expires_at = None
+    config.token_expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=token_data.expires_in)
+        if token_data.expires_in else None
+    )
 
     await db.commit()
     await db.refresh(config)
@@ -232,6 +238,10 @@ async def try_refresh_token(
     if token_data.refresh_token:
         config.refresh_token = token_data.refresh_token
     config.last_refreshed_at = datetime.now(timezone.utc)
+    config.token_expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=token_data.expires_in)
+        if token_data.expires_in else config.token_expires_at
+    )
 
     await db.commit()
     return True

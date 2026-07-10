@@ -1,6 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
+from notion_client.errors import APIResponseError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +28,28 @@ def needs_reconnect(config: NotionConfig) -> bool:
         if not config.refresh_token:
             return True
     return False
+
+
+async def _raise_notion_api_error(
+    exc: APIResponseError,
+    db: AsyncSession | None = None,
+    config: NotionConfig | None = None,
+) -> None:
+    """Convert Notion API errors into clean HTTP exceptions.
+
+    If the error is a 401 (token invalid/expired/revoked), mark the user's
+    config as disconnected and raise 409 so the frontend can prompt reconnect.
+    """
+    if exc.status == 401:
+        if config is not None:
+            config.is_connected = False
+            config.token_expires_at = None
+            await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
+        ) from exc
+    raise exc
 
 
 async def get_notion_config(
@@ -85,6 +108,20 @@ async def ensure_fresh_token(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
             )
+    elif (
+        config.token_expires_at is None
+        and config.refresh_token
+        and config.last_refreshed_at
+        and datetime.now(UTC) - config.last_refreshed_at > timedelta(hours=12)
+    ):
+        success = await try_refresh_token(db, config)
+        if not success:
+            config.is_connected = False
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
+            )
 
 
 async def search_pages(
@@ -94,7 +131,10 @@ async def search_pages(
 ) -> list[dict]:
     await ensure_fresh_token(db, config)
     wrapper = NotionClientWrapper(config.api_key)
-    return await wrapper.search(query)
+    try:
+        return await wrapper.search(query)
+    except APIResponseError as exc:
+        await _raise_notion_api_error(exc, db, config)
 
 
 async def disconnect_notion(
@@ -157,32 +197,35 @@ async def publish_compendium_to_notion(
     wrapper = NotionClientWrapper(config.api_key)
 
     root_content = _build_root_content(project, sections)
-    compendium_page_id = await wrapper.create_page(
-        parent_page_id=target_parent,
-        title=project.name,
-        content_markdown=root_content,
-    )
-
-    published = []
-    for section in sections:
-        section_md = f"# {section.section_name}\n\n{section.content}"
-        if section.notion_page_id:
-            await wrapper.update_page(section.notion_page_id, section_md)
-            page_id = section.notion_page_id
-        else:
-            page_id = await wrapper.create_page(
-                parent_page_id=compendium_page_id,
-                title=f"{section.section_number:02d} — {section.section_name}",
-                content_markdown=section.content,
-            )
-            section.notion_page_id = page_id
-        published.append(
-            {
-                "section_number": section.section_number,
-                "section_name": section.section_name,
-                "notion_page_id": page_id,
-            }
+    try:
+        compendium_page_id = await wrapper.create_page(
+            parent_page_id=target_parent,
+            title=project.name,
+            content_markdown=root_content,
         )
+
+        published = []
+        for section in sections:
+            section_md = f"# {section.section_name}\n\n{section.content}"
+            if section.notion_page_id:
+                await wrapper.update_page(section.notion_page_id, section_md)
+                page_id = section.notion_page_id
+            else:
+                page_id = await wrapper.create_page(
+                    parent_page_id=compendium_page_id,
+                    title=f"{section.section_number:02d} — {section.section_name}",
+                    content_markdown=section.content,
+                )
+                section.notion_page_id = page_id
+            published.append(
+                {
+                    "section_number": section.section_number,
+                    "section_name": section.section_name,
+                    "notion_page_id": page_id,
+                }
+            )
+    except APIResponseError as exc:
+        await _raise_notion_api_error(exc, db, config)
 
     await db.commit()
 
@@ -282,12 +325,15 @@ async def export_public_note_to_notion(
 
     markdown = assemble_markdown(project.name, sections)
     wrapper = NotionClientWrapper(config.api_key)
-    parent_page_id = await resolve_parent_page_id(wrapper, config)
-    page_id = await wrapper.create_page(
-        parent_page_id=parent_page_id,
-        title=project.name,
-        content_markdown=markdown,
-    )
+    try:
+        parent_page_id = await resolve_parent_page_id(wrapper, config)
+        page_id = await wrapper.create_page(
+            parent_page_id=parent_page_id,
+            title=project.name,
+            content_markdown=markdown,
+        )
+    except APIResponseError as exc:
+        await _raise_notion_api_error(exc, db, config)
 
     return {
         "slug": slug,
