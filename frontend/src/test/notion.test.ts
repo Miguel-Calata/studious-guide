@@ -6,6 +6,7 @@ import {
   searchNotionPages,
   updateNotionConfig,
   publishToNotion,
+  exportPublicNoteToNotion,
 } from '@/api/notion'
 import { ApiError } from '@/api/client'
 
@@ -58,6 +59,30 @@ describe('api/notion', () => {
     })
     const res = await startNotionOAuth()
     expect(res.authorize_url).toContain('api.notion.com/v1/oauth/authorize')
+  })
+
+  it('startNotionOAuth con returnTo añade query', async () => {
+    mockFetch((url) => {
+      expect(url).toBe(
+        '/api/v1/notion/oauth/start?return_to=%2Fcompendiums%2Fmi-nota'
+      )
+      return ok({ authorize_url: 'https://api.notion.com/v1/oauth/authorize' })
+    })
+    await startNotionOAuth('/compendiums/mi-nota')
+  })
+
+  it('exportPublicNoteToNotion hace POST al slug público', async () => {
+    mockFetch((url, init) => {
+      expect(url).toBe('/api/v1/public/compendiums/mi-nota/export/notion')
+      expect(init?.method).toBe('POST')
+      return ok({
+        slug: 'mi-nota',
+        notion_page_id: 'np1',
+        notion_url: 'https://www.notion.so/np1',
+      })
+    })
+    const res = await exportPublicNoteToNotion('mi-nota')
+    expect(res.notion_url).toContain('notion.so')
   })
 
   it('disconnectNotion hace POST a /notion/disconnect', async () => {

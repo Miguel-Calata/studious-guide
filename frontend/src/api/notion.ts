@@ -4,14 +4,28 @@ import type {
   NotionOAuthStartResponse,
   NotionSearchResult,
   PublishNotionResponse,
+  ExportPublicNotionResponse,
 } from '@/types/notion'
 
 export function getNotionStatus(): Promise<NotionStatusResponse> {
   return api.get<NotionStatusResponse>('/notion/status')
 }
 
-export async function startNotionOAuth(): Promise<NotionOAuthStartResponse> {
-  return api.get<NotionOAuthStartResponse>('/notion/oauth/start')
+export async function startNotionOAuth(
+  returnTo?: string
+): Promise<NotionOAuthStartResponse> {
+  const qs = returnTo
+    ? `?return_to=${encodeURIComponent(returnTo)}`
+    : ''
+  return api.get<NotionOAuthStartResponse>(`/notion/oauth/start${qs}`)
+}
+
+export function exportPublicNoteToNotion(
+  slug: string
+): Promise<ExportPublicNotionResponse> {
+  return api.post<ExportPublicNotionResponse>(
+    `/public/compendiums/${encodeURIComponent(slug)}/export/notion`
+  )
 }
 
 export function disconnectNotion(): Promise<void> {

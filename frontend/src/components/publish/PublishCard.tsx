@@ -52,7 +52,7 @@ export function PublishCard({ project, sections, onMutate }: PublishCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Publicación</CardTitle>
+        <CardTitle className="text-lg tracking-tight">Publicación</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         <WebPublishSection
@@ -107,7 +107,7 @@ function WebPublishSection({
 
   return (
     <div className="space-y-3">
-      <h4 className="text-sm font-medium flex items-center gap-2">
+      <h4 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
         <Globe className="h-4 w-4" />
         Web pública
       </h4>
@@ -120,7 +120,7 @@ function WebPublishSection({
           </p>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" asChild>
-              <Link to={`/compendiums/${slug}`}>Ver visor público</Link>
+              <Link to={`/compendiums/${slug}`}>Ver nota pública</Link>
             </Button>
             <Button variant="outline" size="sm" asChild>
               <a href={getPublicDownloadUrl(slug)} download>
@@ -197,7 +197,7 @@ function NotionPublishSection({
   if (!notionStatus) {
     return (
       <div className="space-y-3">
-        <h4 className="text-sm font-medium flex items-center gap-2">
+        <h4 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
           <NotepadText className="h-4 w-4" />
           Notion
         </h4>
@@ -208,7 +208,7 @@ function NotionPublishSection({
 
   return (
     <div className="space-y-3">
-      <h4 className="text-sm font-medium flex items-center gap-2">
+      <h4 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
         <NotepadText className="h-4 w-4" />
         Notion
       </h4>
@@ -364,7 +364,7 @@ function NotionConnectedBlock({
       </div>
 
       {status.needs_reconnect && (
-        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+        <div className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
           Tu sesión de Notion ha expirado. Desconecta y vuelve a conectar para
           seguir publicando.
         </div>
@@ -410,11 +410,11 @@ function NotionConnectedBlock({
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             {searchResults && searchResults.length > 0 && (
-              <div className="border rounded-md divide-y max-h-40 overflow-auto">
+              <div className="max-h-40 divide-y overflow-auto rounded-xl border">
                 {searchResults.map((r) => (
                   <button
                     key={r.id}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors"
+                    className="w-full px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
                     onClick={() => {
                       setParentPageId(r.id)
                       setShowSearch(false)

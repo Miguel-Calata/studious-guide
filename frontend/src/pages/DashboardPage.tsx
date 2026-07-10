@@ -2,8 +2,8 @@ import { useState } from 'react'
 import useSWR from 'swr'
 
 import { useAuth } from '@/contexts/AuthContext'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { ProjectList } from '@/components/projects/ProjectList'
 import { CreateProjectDialog } from '@/components/projects/CreateProjectDialog'
 import { getProjects } from '@/api/projects'
@@ -18,23 +18,26 @@ export function DashboardPage() {
   )
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Proyectos</h1>
-          <p className="text-muted-foreground">
-            Bienvenido, {user?.full_name ?? user?.email}
+    <div className="space-y-8">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-2">
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+            Proyectos
+          </h1>
+          <p className="max-w-xl text-base font-medium text-muted-foreground sm:text-lg">
+            Hola, {user?.full_name ?? user?.email}. Genera notas clínicas a
+            partir de tus fuentes.
           </p>
         </div>
         <Button onClick={() => setDialogOpen(true)}>Nuevo proyecto</Button>
       </div>
 
       {error && (
-        <Card>
-          <CardContent className="pt-6 text-sm text-destructive">
+        <Alert variant="destructive">
+          <AlertDescription>
             No se pudieron cargar los proyectos. Intenta de nuevo.
-          </CardContent>
-        </Card>
+          </AlertDescription>
+        </Alert>
       )}
 
       <ProjectList projects={projects ?? []} isLoading={isLoading} />

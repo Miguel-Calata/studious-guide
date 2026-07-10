@@ -2,8 +2,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useState } from 'react'
+
 import { useAuth } from '@/contexts/AuthContext'
 import { registerSchema, type RegisterFormValues } from '@/schemas/auth'
+import { AuthShell } from '@/components/layout/PublicHeader'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,6 +18,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { BRAND_LOGO } from '@/lib/brand'
 
 export function RegisterPage() {
   const { register: registerUser } = useAuth()
@@ -37,25 +41,35 @@ export function RegisterPage() {
         password: values.password,
         full_name: values.full_name,
       })
-      navigate('/')
+      navigate('/app')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al registrarse')
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>Crear cuenta</CardTitle>
-          <CardDescription>Regístrate en SAM Platform</CardDescription>
+    <AuthShell>
+      <Card className="w-full border-black/10 shadow-card">
+        <CardHeader className="space-y-3">
+          <div className="flex items-center gap-2">
+            <img
+              src={BRAND_LOGO}
+              alt=""
+              className="size-8 rounded-md object-cover"
+            />
+            <span className="text-lg font-semibold tracking-tight">SAM</span>
+          </div>
+          <CardTitle className="text-2xl tracking-tight">Crear cuenta</CardTitle>
+          <CardDescription className="text-base">
+            Crea tu cuenta en SAM
+          </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
             {error && (
-              <p className="text-sm text-destructive" role="alert">
-                {error}
-              </p>
+              <Alert variant="destructive">
+                <AlertDescription role="alert">{error}</AlertDescription>
+              </Alert>
             )}
             <div className="space-y-2">
               <Label htmlFor="full_name">Nombre completo</Label>
@@ -115,13 +129,16 @@ export function RegisterPage() {
             </Button>
             <p className="text-sm text-muted-foreground">
               ¿Ya tienes cuenta?{' '}
-              <Link to="/login" className="text-primary underline">
+              <Link
+                to="/login"
+                className="font-medium text-foreground underline-offset-4 hover:underline"
+              >
                 Inicia sesión
               </Link>
             </p>
           </CardFooter>
         </form>
       </Card>
-    </div>
+    </AuthShell>
   )
 }

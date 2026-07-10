@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom'
 import useSWR from 'swr'
-import { BookOpen, Calendar, Layers } from 'lucide-react'
+import { BookOpen } from 'lucide-react'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { listPublicCompendiums } from '@/api/public'
+import { coverForSlug } from '@/lib/brand'
 import type { PublicCompendiumListItem } from '@/types/public'
 
 export function PublicCompendiumListPage() {
@@ -14,79 +15,98 @@ export function PublicCompendiumListPage() {
   )
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Compendios médicos
+    <div className="space-y-8">
+      <div className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+          Notas
         </h1>
-        <p className="text-muted-foreground mt-1">
-          Compendios generados con IA a partir de guías clínicas y artículos científicos.
+        <p className="max-w-2xl text-base font-medium text-muted-foreground sm:text-lg">
+          Compendios clínicos generados a partir de guías y artículos, listos
+          para consultar.
         </p>
       </div>
 
       {isLoading && (
-        <p className="text-muted-foreground">Cargando compendios…</p>
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="overflow-hidden rounded-2xl border border-black/10 shadow-card"
+            >
+              <Skeleton className="h-60 w-full rounded-none" />
+              <div className="space-y-3 p-6">
+                <Skeleton className="h-7 w-3/4" />
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-5 w-24" />
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {error && (
-        <p className="text-destructive">
-          No se pudieron cargar los compendios.
+        <p className="text-destructive" role="alert">
+          No se pudieron cargar las notas.
         </p>
       )}
 
       {data && data.length === 0 && (
-        <div className="text-center py-12">
-          <BookOpen className="mx-auto h-12 w-12 text-muted-foreground/50" />
-          <p className="mt-4 text-muted-foreground">
-            Aún no hay compendios publicados.
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-black/15 py-16 text-center">
+          <BookOpen className="mb-3 h-10 w-10 text-muted-foreground" />
+          <p className="font-medium">Aún no hay notas publicadas</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Cuando se publique un compendio, aparecerá aquí.
           </p>
         </div>
       )}
 
       {data && data.length > 0 && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {data.map((item) => (
-            <CompendiumCard key={item.slug} item={item} />
+            <li key={item.slug}>
+              <NoteCard item={item} />
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   )
 }
 
-function CompendiumCard({ item }: { item: PublicCompendiumListItem }) {
+function NoteCard({ item }: { item: PublicCompendiumListItem }) {
+  const cover = coverForSlug(item.slug)
+
   return (
-    <Link to={`/compendiums/${item.slug}`} className="block group">
-      <Card className="transition-colors hover:border-primary/50">
-        <CardHeader>
-          <CardTitle className="text-base group-hover:text-primary transition-colors">
+    <Link
+      to={`/compendiums/${item.slug}`}
+      className="group block h-full overflow-hidden rounded-2xl border border-black/10 bg-card shadow-card transition-shadow hover:shadow-md"
+    >
+      <div className="relative h-60 w-full overflow-hidden bg-muted">
+        <img
+          src={cover}
+          alt=""
+          className="absolute inset-0 size-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+        />
+      </div>
+      <div className="flex flex-col gap-8 p-6">
+        <div className="space-y-2">
+          <h2 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
             {item.name}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {item.description && (
-            <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+          </h2>
+          {item.description ? (
+            <p className="line-clamp-3 text-base font-medium leading-snug text-foreground/55 sm:text-lg">
               {item.description}
             </p>
-          )}
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Layers className="h-3 w-3" />
+          ) : (
+            <p className="text-base font-medium text-foreground/40 sm:text-lg">
               {item.section_count} secciones
-            </span>
-            {item.published_at && (
-              <span className="flex items-center gap-1">
-                <Calendar className="h-3 w-3" />
-                {new Date(item.published_at).toLocaleDateString('es-ES', {
-                  year: 'numeric',
-                  month: 'short',
-                  day: 'numeric',
-                })}
-              </span>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+            </p>
+          )}
+        </div>
+        <span className="text-base font-medium text-foreground transition-opacity group-hover:opacity-70 sm:text-lg">
+          Abrir nota →
+        </span>
+      </div>
     </Link>
   )
 }

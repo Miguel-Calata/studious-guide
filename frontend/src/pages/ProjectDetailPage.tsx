@@ -5,6 +5,7 @@ import useSWR from 'swr'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import { DocumentUploader } from '@/components/documents/DocumentUploader'
 import { DocumentList } from '@/components/documents/DocumentList'
 import { ExtractionCard } from '@/components/pipeline/ExtractionCard'
@@ -76,16 +77,31 @@ export function ProjectDetailPage() {
   if (projectError) {
     return (
       <div className="space-y-4">
-        <Link to="/" className="text-sm text-primary underline">
+        <Link
+          to="/app"
+          className="text-sm font-medium text-foreground underline-offset-4 hover:underline"
+        >
           ← Volver a proyectos
         </Link>
-        <p className="text-destructive">No se encontró el proyecto.</p>
+        <p className="text-sm text-destructive" role="alert">
+          No se encontró el proyecto.
+        </p>
       </div>
     )
   }
 
   if (!project) {
-    return <p className="text-muted-foreground">Cargando…</p>
+    return (
+      <div className="space-y-8" aria-busy="true" aria-label="Cargando proyecto">
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-9 w-64" />
+          <Skeleton className="h-5 w-48" />
+        </div>
+        <Skeleton className="h-40 w-full rounded-2xl" />
+        <Skeleton className="h-32 w-full rounded-2xl" />
+      </div>
+    )
   }
 
   const refreshAll = () => {
@@ -99,13 +115,16 @@ export function ProjectDetailPage() {
   )
 
   return (
-    <div className="space-y-6">
-      <div>
-        <Link to="/" className="text-sm text-primary underline">
+    <div className="space-y-8">
+      <div className="space-y-3">
+        <Link
+          to="/app"
+          className="text-sm font-medium text-foreground underline-offset-4 hover:underline"
+        >
           ← Volver a proyectos
         </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight">
             {project.name}
           </h1>
           <Badge variant={statusVariant(project.status)}>
@@ -116,7 +135,9 @@ export function ProjectDetailPage() {
           )}
         </div>
         {project.description && (
-          <p className="mt-1 text-muted-foreground">{project.description}</p>
+          <p className="max-w-2xl text-base font-medium text-muted-foreground">
+            {project.description}
+          </p>
         )}
       </div>
 
@@ -124,7 +145,9 @@ export function ProjectDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Subir documentos (PDF)</CardTitle>
+          <CardTitle className="text-lg tracking-tight">
+            Subir documentos (PDF)
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <DocumentUploader projectId={id} onUploaded={() => mutateDocs()} />
@@ -133,7 +156,7 @@ export function ProjectDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Documentos</CardTitle>
+          <CardTitle className="text-lg tracking-tight">Documentos</CardTitle>
         </CardHeader>
         <CardContent>
           {docsError ? (

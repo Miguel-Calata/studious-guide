@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+
+import { cn } from '@/lib/utils'
 import './MarkdownViewer.css'
 
 interface MarkdownViewerProps {
@@ -30,11 +32,7 @@ export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
   return (
     <div
       ref={ref}
-      className={`markdown-viewer ${className ?? ''}`}
-      style={{
-        lineHeight: 1.7,
-        fontSize: '0.95rem',
-      }}
+      className={cn('markdown-viewer', className)}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

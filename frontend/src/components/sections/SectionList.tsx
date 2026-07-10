@@ -1,3 +1,5 @@
+import { Loader2 } from 'lucide-react'
+
 import { Badge } from '@/components/ui/badge'
 import {
   sectionStatusLabel,
@@ -20,16 +22,22 @@ export function SectionList({
   )
 
   return (
-    <ul className="divide-y rounded-md border">
+    <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
       {sorted.map((section) => (
         <li key={section.id}>
           <button
             type="button"
             onClick={() => onSelect(section)}
-            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-muted"
+            className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/60"
           >
             <span className="flex min-w-0 items-center gap-2">
-              <span className="text-sm font-medium text-muted-foreground">
+              {section.status === 'processing' && (
+                <Loader2
+                  className="size-3.5 shrink-0 animate-spin text-muted-foreground"
+                  aria-hidden
+                />
+              )}
+              <span className="text-sm font-medium tabular-nums text-muted-foreground">
                 {section.section_number}.
               </span>
               <span className="truncate text-sm">{section.section_name}</span>
@@ -46,7 +54,7 @@ export function SectionList({
             </span>
           </button>
           {section.status === 'failed' && section.error_message && (
-            <p className="px-3 pb-2 text-xs text-destructive line-clamp-2">
+            <p className="border-t border-destructive/10 bg-destructive/5 px-3 py-2 text-xs text-destructive line-clamp-2">
               {section.error_message}
             </p>
           )}

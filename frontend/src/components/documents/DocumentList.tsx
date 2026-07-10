@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { MoreVertical, Trash2 } from 'lucide-react'
+import { FileText, MoreVertical, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -63,14 +64,32 @@ export function DocumentList({
   }
 
   if (isLoading) {
-    return <p className="text-sm text-muted-foreground">Cargando documentos…</p>
+    return (
+      <div className="space-y-2" aria-busy="true" aria-label="Cargando documentos">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 rounded-xl border border-border px-3 py-2.5"
+          >
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="ml-auto h-5 w-16" />
+            <Skeleton className="h-5 w-16" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+        ))}
+      </div>
+    )
   }
 
   if (documents.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Aún no hay documentos en este proyecto.
-      </p>
+      <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-black/15 py-10 text-center">
+        <FileText className="mb-2 h-8 w-8 text-muted-foreground" />
+        <p className="text-sm font-medium">Aún no hay documentos</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Sube PDFs arriba para empezar la extracción.
+        </p>
+      </div>
     )
   }
 

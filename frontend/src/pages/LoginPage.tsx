@@ -2,8 +2,11 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useState } from 'react'
+
 import { useAuth } from '@/contexts/AuthContext'
 import { loginSchema, type LoginFormValues } from '@/schemas/auth'
+import { AuthShell } from '@/components/layout/PublicHeader'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,6 +18,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { BRAND_LOGO } from '@/lib/brand'
 
 export function LoginPage() {
   const { login } = useAuth()
@@ -35,27 +39,37 @@ export function LoginPage() {
     try {
       await login(values)
       const from = (location.state as { from?: { pathname: string } })?.from
-      navigate(from?.pathname ?? '/')
+      navigate(from?.pathname ?? '/app')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al iniciar sesión')
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>Iniciar sesión</CardTitle>
-          <CardDescription>
-            Accede a tu cuenta de SAM Platform
+    <AuthShell>
+      <Card className="w-full border-black/10 shadow-card">
+        <CardHeader className="space-y-3">
+          <div className="flex items-center gap-2">
+            <img
+              src={BRAND_LOGO}
+              alt=""
+              className="size-8 rounded-md object-cover"
+            />
+            <span className="text-lg font-semibold tracking-tight">SAM</span>
+          </div>
+          <CardTitle className="text-2xl tracking-tight">
+            Iniciar sesión
+          </CardTitle>
+          <CardDescription className="text-base">
+            Accede a tu cuenta
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
             {error && (
-              <p className="text-sm text-destructive" role="alert">
-                {error}
-              </p>
+              <Alert variant="destructive">
+                <AlertDescription role="alert">{error}</AlertDescription>
+              </Alert>
             )}
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
@@ -92,13 +106,16 @@ export function LoginPage() {
             </Button>
             <p className="text-sm text-muted-foreground">
               ¿No tienes cuenta?{' '}
-              <Link to="/register" className="text-primary underline">
+              <Link
+                to="/register"
+                className="font-medium text-foreground underline-offset-4 hover:underline"
+              >
                 Regístrate
               </Link>
             </p>
           </CardFooter>
         </form>
       </Card>
-    </div>
+    </AuthShell>
   )
 }

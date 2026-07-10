@@ -50,32 +50,26 @@ function renderPage() {
 describe('PublicCompendiumListPage', () => {
   beforeEach(() => vi.resetAllMocks())
 
-  it('muestra el título y subtítulo', async () => {
+  it('muestra el título Notas', async () => {
     setup()
     renderPage()
-    expect(await screen.findByText('Compendios médicos')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Notas' })).toBeTruthy()
   })
 
-  it('muestra las tarjetas de compendios', async () => {
+  it('muestra las tarjetas de notas', async () => {
     setup()
     renderPage()
     expect(await screen.findByText('LRA')).toBeTruthy()
     expect(await screen.findByText('Diabetes Mellitus 2')).toBeTruthy()
     expect(await screen.findByText('Lesión Renal Aguda')).toBeTruthy()
+    expect(screen.getAllByText('Abrir nota →')).toHaveLength(2)
   })
 
-  it('muestra el número de secciones', async () => {
-    setup()
-    renderPage()
-    const badges = await screen.findAllByText('11 secciones')
-    expect(badges).toHaveLength(2)
-  })
-
-  it('muestra empty state cuando no hay compendios', async () => {
+  it('muestra empty state cuando no hay notas', async () => {
     setup([])
     renderPage()
     expect(
-      await screen.findByText(/no hay compendios publicados/i)
+      await screen.findByText(/no hay notas publicadas/i)
     ).toBeTruthy()
   })
 
@@ -84,7 +78,7 @@ describe('PublicCompendiumListPage', () => {
     renderPage()
     await waitFor(() =>
       expect(
-        screen.getByText(/no se pudieron cargar los compendios/i)
+        screen.getByText(/no se pudieron cargar las notas/i)
       ).toBeTruthy()
     )
   })

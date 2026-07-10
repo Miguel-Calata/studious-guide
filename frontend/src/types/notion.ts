@@ -30,3 +30,9 @@ export interface PublishNotionResponse {
   sections_published: NotionPageInfo[]
   notion_url: string
 }
+
+export interface ExportPublicNotionResponse {
+  slug: string
+  notion_page_id: string
+  notion_url: string
+}

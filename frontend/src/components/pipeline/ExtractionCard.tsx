@@ -3,6 +3,7 @@ import { RefreshCw, Play } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ModelSelect } from '@/components/ui/model-select'
 import { ProgressBar } from '@/components/pipeline/ProgressBar'
 import { extractAllForProject } from '@/api/extractions'
 import { getModels, type AiModel } from '@/api/ai'
@@ -64,7 +65,7 @@ export function ExtractionCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Extracción</CardTitle>
+        <CardTitle className="text-lg tracking-tight">Extracción</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {!hasDocs ? (
@@ -78,25 +79,20 @@ export function ExtractionCard({
               total={documents.length}
               label="Documentos extraídos"
             />
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <label className="text-sm text-muted-foreground" htmlFor="extract-model">
-                Modelo:
+                Modelo
               </label>
-              <select
+              <ModelSelect
                 id="extract-model"
                 value={selectedModel}
-                onChange={(e) => {
-                  setSelectedModel(e.target.value)
-                  writeModelPref('extraction', e.target.value)
+                onChange={(v) => {
+                  setSelectedModel(v)
+                  writeModelPref('extraction', v)
                 }}
-                className="rounded-md border bg-background px-2 py-1 text-sm"
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+                options={models}
+                disabled={busy}
+              />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button

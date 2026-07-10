@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ModelSelect } from '@/components/ui/model-select'
 import { ProgressBar } from '@/components/pipeline/ProgressBar'
 import { SectionList } from '@/components/sections/SectionList'
 import { SectionEditor } from '@/components/sections/SectionEditor'
@@ -115,7 +116,7 @@ export function CompendiumCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Compendio</CardTitle>
+        <CardTitle className="text-lg tracking-tight">Compendio</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
@@ -134,45 +135,35 @@ export function CompendiumCard({
         </div>
 
         <div className="flex flex-wrap gap-4">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <label className="text-sm text-muted-foreground" htmlFor="gemini-model">
-              Motor Gemini:
+              Motor Gemini
             </label>
-            <select
+            <ModelSelect
               id="gemini-model"
               value={selectedGemini}
-              onChange={(e) => {
-                setSelectedGemini(e.target.value)
-                writeModelPref('gemini', e.target.value)
+              onChange={(v) => {
+                setSelectedGemini(v)
+                writeModelPref('gemini', v)
               }}
-              className="rounded-md border bg-background px-2 py-1 text-sm"
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+              options={models}
+              disabled={busy}
+            />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <label className="text-sm text-muted-foreground" htmlFor="claude-model">
-              Motor Claude:
+              Motor Claude
             </label>
-            <select
+            <ModelSelect
               id="claude-model"
               value={selectedClaude}
-              onChange={(e) => {
-                setSelectedClaude(e.target.value)
-                writeModelPref('claude', e.target.value)
+              onChange={(v) => {
+                setSelectedClaude(v)
+                writeModelPref('claude', v)
               }}
-              className="rounded-md border bg-background px-2 py-1 text-sm"
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+              options={models}
+              disabled={busy}
+            />
           </div>
         </div>
 

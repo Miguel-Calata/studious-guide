@@ -1,3 +1,5 @@
+import { Progress } from '@/components/ui/progress'
+
 export function ProgressBar({
   value,
   total,
@@ -8,26 +10,16 @@ export function ProgressBar({
   label?: string
 }) {
   const pct = total > 0 ? Math.round((value / total) * 100) : 0
+
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-xs tabular-nums text-muted-foreground">
         <span>{label ?? 'Progreso'}</span>
         <span>
           {value}/{total} ({pct}%)
         </span>
       </div>
-      <div
-        className="h-2 w-full overflow-hidden rounded-full bg-muted"
-        role="progressbar"
-        aria-valuenow={value}
-        aria-valuemin={0}
-        aria-valuemax={total}
-      >
-        <div
-          className="h-full bg-primary transition-all"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <Progress value={value} max={total || 1} />
     </div>
   )
 }

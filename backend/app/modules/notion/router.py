@@ -1,15 +1,25 @@
-from fastapi import APIRouter, Depends, Query, Request, Response, status
-from fastapi.responses import RedirectResponse
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.user import User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.compendiums.dependencies import get_project_for_compendium
 from app.modules.notion.dependencies import get_notion_config
 from app.modules.notion.oauth_service import build_authorize_url, exchange_code, save_oauth_result
-from app.modules.notion.oauth_state import issue_state, set_state_cookie, clear_state_cookie, verify_state
+from app.modules.notion.oauth_state import (
+    clear_state_cookie,
+    issue_state,
+    sanitize_return_to,
+    set_state_cookie,
+    verify_state,
+)
 from app.modules.notion.schemas import (
+    ExportPublicNotionResponse,
     NotionConfigUpdate,
     NotionOAuthStartResponse,
     NotionSearchResult,
@@ -19,6 +29,7 @@ from app.modules.notion.schemas import (
 )
 from app.modules.notion.service import (
     disconnect_notion,
+    export_public_note_to_notion,
     get_notion_config as get_config_service,
     needs_reconnect,
     publish_compendium_to_notion,
@@ -28,8 +39,14 @@ from app.modules.notion.service import (
 
 router = APIRouter(tags=["Notion"])
 
-# Frontend URL to redirect to after OAuth callback (query ?notion=connected or ?notion=error&msg=...).
-_FRONTEND_CALLBACK_PATH = "/settings/notion"
+_DEFAULT_RETURN_TO = "/app"
+
+
+def _frontend_redirect(path: str, **query: str) -> str:
+    base = settings.frontend_url.rstrip("/")
+    safe_path = sanitize_return_to(path)
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in query.items() if v is not None)
+    return f"{base}{safe_path}?{qs}" if qs else f"{base}{safe_path}"
 
 
 @router.get(
@@ -37,17 +54,19 @@ _FRONTEND_CALLBACK_PATH = "/settings/notion"
     response_model=NotionOAuthStartResponse,
 )
 async def oauth_start(
+    return_to: str | None = Query(None),
     current_user: User = Depends(get_current_user),
-) -> dict:
+) -> JSONResponse:
     """Generate the Notion OAuth authorize URL and a signed state token.
 
     The frontend should redirect the user's browser to the returned URL.
+    Optional return_to is a relative path (e.g. /compendiums/slug) for post-OAuth redirect.
     """
-    state = issue_state(str(current_user.id))
+    state = issue_state(str(current_user.id), return_to=return_to)
     authorize_url = build_authorize_url(state)
-    response = Response()
+    response = JSONResponse(content={"authorize_url": authorize_url})
     set_state_cookie(response, state)
-    return {"authorize_url": authorize_url}
+    return response
 
 
 @router.get("/notion/oauth/callback")
@@ -62,17 +81,19 @@ async def oauth_callback(
     Validates state + cookie, exchanges the code for tokens, persists them,
     and redirects the browser back to the frontend.
     """
-    # 1. Validate state (CSRF) — also extracts user_id.
-    user_id = verify_state(state, request)
+    # 1. Validate state (CSRF) — also extracts user_id and return_to.
+    user_id, return_to = verify_state(state, request)
 
     # 2. Exchange code → token (uses HTTP Basic with client_id:client_secret).
     try:
         token_data = await exchange_code(code)
     except Exception as exc:
-        return RedirectResponse(
-            url=f"{_FRONTEND_CALLBACK_PATH}?notion=error&msg={str(exc)[:200]}",
+        response = RedirectResponse(
+            url=_frontend_redirect(return_to, notion="error", msg=str(exc)[:200]),
             status_code=status.HTTP_302_FOUND,
         )
+        clear_state_cookie(response)
+        return response
 
     # 3. Look up the user.
     from sqlalchemy import select as sa_select
@@ -81,23 +102,27 @@ async def oauth_callback(
     result = await db.execute(sa_select(UserModel).where(UserModel.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
-        return RedirectResponse(
-            url=f"{_FRONTEND_CALLBACK_PATH}?notion=error&msg=Usuario+no+encontrado",
+        response = RedirectResponse(
+            url=_frontend_redirect(return_to, notion="error", msg="Usuario no encontrado"),
             status_code=status.HTTP_302_FOUND,
         )
+        clear_state_cookie(response)
+        return response
 
     # 4. Persist tokens.
     try:
         await save_oauth_result(db, user, token_data)
-    except Exception as exc:
-        return RedirectResponse(
-            url=f"{_FRONTEND_CALLBACK_PATH}?notion=error&msg=Error+guardando+tokens",
+    except Exception:
+        response = RedirectResponse(
+            url=_frontend_redirect(return_to, notion="error", msg="Error guardando tokens"),
             status_code=status.HTTP_302_FOUND,
         )
+        clear_state_cookie(response)
+        return response
 
     # 5. Clear state cookie and redirect to frontend.
     response = RedirectResponse(
-        url=f"{_FRONTEND_CALLBACK_PATH}?notion=connected",
+        url=_frontend_redirect(return_to, notion="connected"),
         status_code=status.HTTP_302_FOUND,
     )
     clear_state_cookie(response)
@@ -190,3 +215,16 @@ async def publish(
 ) -> dict:
     parent_page_id = body.parent_page_id if body else None
     return await publish_compendium_to_notion(db, project, config, parent_page_id)
+
+
+@router.post(
+    "/public/compendiums/{slug}/export/notion",
+    response_model=ExportPublicNotionResponse,
+)
+async def export_public_to_notion(
+    slug: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Export a published public note into the current user's Notion workspace."""
+    return await export_public_note_to_notion(db, current_user, slug)

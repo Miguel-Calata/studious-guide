@@ -12,7 +12,7 @@ export default function App() {
           <AppRouter />
         </AuthProvider>
       </ApiProvider>
-      <Toaster richColors position="top-right" />
+      <Toaster position="top-right" theme="light" closeButton />
     </BrowserRouter>
   )
 }

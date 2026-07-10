@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     notion_oauth_state_cookie_name: str = "notion_oauth_state"
     notion_oauth_state_ttl_seconds: int = 300
 
+    # Frontend base URL for OAuth redirects after Notion callback
+    frontend_url: str = "http://localhost:5173"
+
     # Storage (PDFs)
     storage_backend: str = "local"
     pdf_storage_path: str = "/app/data/pdfs"

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.compendium_section import CompendiumSection, SectionStatus
 from app.models.notion_config import NotionConfig
@@ -11,6 +12,7 @@ from app.models.user import User
 from app.modules.notion.client import NotionClientWrapper
 from app.modules.notion.oauth_service import try_refresh_token
 from app.modules.notion.schemas import NotionConfigUpdate
+from app.modules.publishing.service import assemble_markdown
 
 
 def needs_reconnect(config: NotionConfig) -> bool:
@@ -213,3 +215,82 @@ def _build_root_content(
         lines.append(f"- {s.section_number:02d}. {s.section_name}")
     lines.append("")
     return "\n".join(lines)
+
+
+async def resolve_parent_page_id(
+    wrapper: NotionClientWrapper,
+    config: NotionConfig,
+) -> str:
+    """Pick a parent page: saved default, else first accessible page from search."""
+    if config.default_parent_page_id:
+        return config.default_parent_page_id
+
+    results = await wrapper.search("")
+    for item in results:
+        if item.get("object") == "page":
+            return item["id"]
+    if results:
+        return results[0]["id"]
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "No hay páginas accesibles en Notion. "
+            "Al conectar, comparte al menos una página con SAM."
+        ),
+    )
+
+
+async def export_public_note_to_notion(
+    db: AsyncSession,
+    user: User,
+    slug: str,
+) -> dict:
+    """Create a single Notion page with the full public note for the current user."""
+    config = await get_notion_config(db, user)
+    if config is None or not config.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay conexión con Notion",
+        )
+    if needs_reconnect(config):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
+        )
+
+    await ensure_fresh_token(db, config)
+
+    result = await db.execute(
+        select(Project)
+        .where(Project.slug == slug, Project.is_published.is_(True))
+        .options(selectinload(Project.sections))
+    )
+    project = result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Compendio no encontrado",
+        )
+
+    sections = sorted(project.sections, key=lambda s: s.section_number)
+    if not sections:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La nota no tiene secciones para exportar.",
+        )
+
+    markdown = assemble_markdown(project.name, sections)
+    wrapper = NotionClientWrapper(config.api_key)
+    parent_page_id = await resolve_parent_page_id(wrapper, config)
+    page_id = await wrapper.create_page(
+        parent_page_id=parent_page_id,
+        title=project.name,
+        content_markdown=markdown,
+    )
+
+    return {
+        "slug": slug,
+        "notion_page_id": page_id,
+        "notion_url": f"https://www.notion.so/{page_id.replace('-', '')}",
+    }

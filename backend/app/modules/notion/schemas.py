@@ -41,3 +41,9 @@ class PublishNotionResponse(BaseModel):
     compendium_page_id: str
     sections_published: list[NotionPageInfo]
     notion_url: str
+
+
+class ExportPublicNotionResponse(BaseModel):
+    slug: str
+    notion_page_id: str
+    notion_url: str

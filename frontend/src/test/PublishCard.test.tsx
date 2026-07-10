@@ -156,7 +156,7 @@ describe('PublishCard en ProjectDetailPage', () => {
     await waitFor(() =>
       expect(screen.getByText(/publicado correctamente/i)).toBeTruthy()
     )
-    expect(await screen.findByText('Ver visor público')).toBeTruthy()
+    expect(await screen.findByText('Ver nota pública')).toBeTruthy()
     expect(await screen.findByText('Descargar .md')).toBeTruthy()
   })
 

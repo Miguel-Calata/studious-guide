@@ -91,7 +91,7 @@ export function SectionEditor({
         </DialogHeader>
 
         {section.status === 'failed' && section.error_message && (
-          <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="rounded-xl border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {section.error_message}
           </div>
         )}

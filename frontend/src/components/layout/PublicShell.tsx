@@ -1,44 +1,12 @@
-import { Link, Outlet } from 'react-router-dom'
-import { useAuth } from '@/contexts/AuthContext'
+import { Outlet } from 'react-router-dom'
+
+import { BrandNav } from './BrandNav'
 
 export function PublicShell() {
-  const { user } = useAuth()
-
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b bg-background">
-        <div className="container flex h-14 items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link to="/compendiums" className="font-semibold">
-              SAM Platform
-            </Link>
-            <Link
-              to="/compendiums"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Compendios
-            </Link>
-          </div>
-          <div>
-            {user ? (
-              <Link
-                to="/"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Panel
-              </Link>
-            ) : (
-              <Link
-                to="/login"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Entrar
-              </Link>
-            )}
-          </div>
-        </div>
-      </header>
-      <main className="container flex-1 py-6">
+    <div className="flex min-h-screen flex-col bg-background">
+      <BrandNav mode="public" />
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-20 pt-2 sm:px-8">
         <Outlet />
       </main>
     </div>

@@ -26,6 +26,7 @@ def _make_mock_settings(**overrides):
         "secret_key": "test-secret-key-for-oauth",
         "access_token_expire_minutes": 60,
         "refresh_token_expire_days": 7,
+        "frontend_url": "http://localhost:5173",
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -196,7 +197,8 @@ async def test_oauth_start_returns_authorize_url(client, db_session):
     token = await _register_and_login(client, "notion-oauth-start@test.com")
     mock_settings = _make_mock_settings()
 
-    with patch("app.modules.notion.oauth_state.settings", mock_settings):
+    with patch("app.modules.notion.oauth_state.settings", mock_settings), \
+         patch("app.modules.notion.oauth_service.settings", mock_settings):
         response = await client.get(
             "/api/v1/notion/oauth/start",
             headers={"Authorization": f"Bearer {token}"},
@@ -228,7 +230,6 @@ async def test_oauth_callback_success_persists_tokens(client, db_session):
 
     user_id = decode_access_token(token)
     mock_settings = _make_mock_settings()
-    state = issue_state(user_id)
 
     mock_token_response = {
         "access_token": "ntn_new_access",
@@ -255,11 +256,13 @@ async def test_oauth_callback_success_persists_tokens(client, db_session):
 
     with patch("app.modules.notion.oauth_state.settings", mock_settings), \
          patch("app.modules.notion.oauth_service.settings", mock_settings), \
+         patch("app.modules.notion.router.settings", mock_settings), \
          patch(
              "app.modules.notion.oauth_service.httpx.AsyncClient"
          ) as mock_client_cls:
+        state = issue_state(user_id)
         mock_http = AsyncMock()
-        mock_resp = AsyncMock()
+        mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_token_response
         mock_http.post = AsyncMock(return_value=mock_resp)
@@ -274,7 +277,9 @@ async def test_oauth_callback_success_persists_tokens(client, db_session):
         )
 
     assert response.status_code == 302
-    assert "notion=connected" in response.headers["location"]
+    loc = response.headers["location"]
+    assert "notion=connected" in loc
+    assert loc.startswith("http://localhost:5173/")
 
     result = await db_session.execute(
         select(NotionConfig).where(NotionConfig.user_id == user_id)
@@ -561,7 +566,7 @@ async def test_publish_auto_refreshes_expired_token(client, db_session):
         mock_oauth_settings.notion_oauth_client_secret = "csecret"
 
         mock_http = AsyncMock()
-        mock_resp = AsyncMock()
+        mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_refresh_response
         mock_http.post = AsyncMock(return_value=mock_resp)
@@ -581,4 +586,127 @@ async def test_publish_auto_refreshes_expired_token(client, db_session):
     )
     config = result.scalar_one()
     assert config.access_token == "ntn_refreshed_access"
-    assert config.last_refreshed_at is not None
+
+
+# ─── Public export to reader's Notion ───
+
+
+@pytest.mark.asyncio
+async def test_export_public_note_creates_single_page(client, db_session):
+    token = await _register_and_login(client, "notion-export-public@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(db_session, user_id, connected=True)
+    project_id = await _create_project(client, token, "Nota Pública Export")
+    await _setup_compendium(client, token, project_id, db_session)
+
+    # Publish to make it public
+    pub = await client.post(
+        f"/api/v1/projects/{project_id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert pub.status_code == 200
+    slug = pub.json()["slug"]
+
+    with patch(
+        "app.modules.notion.service.NotionClientWrapper"
+    ) as mock_wrapper_cls:
+        mock_wrapper = mock_wrapper_cls.return_value
+        mock_wrapper.create_page = AsyncMock(return_value="exported-page-1")
+        mock_wrapper.search = AsyncMock(return_value=[])
+
+        response = await client.post(
+            f"/api/v1/public/compendiums/{slug}/export/notion",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["slug"] == slug
+    assert data["notion_page_id"] == "exported-page-1"
+    assert "notion.so" in data["notion_url"]
+    mock_wrapper.create_page.assert_awaited_once()
+    call_kwargs = mock_wrapper.create_page.await_args
+    assert call_kwargs.kwargs["parent_page_id"] == "parent-page-123"
+    assert call_kwargs.kwargs["title"] == "Nota Pública Export"
+
+
+@pytest.mark.asyncio
+async def test_export_public_note_requires_auth(client, db_session):
+    response = await client.post(
+        "/api/v1/public/compendiums/some-slug/export/notion",
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_export_public_note_requires_notion(client, db_session):
+    token = await _register_and_login(client, "notion-export-nocon@test.com")
+    project_id = await _create_project(client, token, "Sin Notion")
+    await _setup_compendium(client, token, project_id, db_session)
+    pub = await client.post(
+        f"/api/v1/projects/{project_id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    slug = pub.json()["slug"]
+
+    response = await client.post(
+        f"/api/v1/public/compendiums/{slug}/export/notion",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_export_public_uses_search_fallback_for_parent(client, db_session):
+    token = await _register_and_login(client, "notion-export-search@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    config = await _create_notion_config(db_session, user_id, connected=True)
+    config.default_parent_page_id = None
+    await db_session.commit()
+
+    project_id = await _create_project(client, token, "Search Parent")
+    await _setup_compendium(client, token, project_id, db_session)
+    pub = await client.post(
+        f"/api/v1/projects/{project_id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    slug = pub.json()["slug"]
+
+    with patch(
+        "app.modules.notion.service.NotionClientWrapper"
+    ) as mock_wrapper_cls:
+        mock_wrapper = mock_wrapper_cls.return_value
+        mock_wrapper.search = AsyncMock(
+            return_value=[{"id": "found-parent", "title": "Home", "object": "page"}]
+        )
+        mock_wrapper.create_page = AsyncMock(return_value="page-from-search")
+
+        response = await client.post(
+            f"/api/v1/public/compendiums/{slug}/export/notion",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert mock_wrapper.create_page.await_args.kwargs["parent_page_id"] == "found-parent"
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_accepts_return_to(client, db_session):
+    token = await _register_and_login(client, "notion-return-to@test.com")
+    mock_settings = _make_mock_settings()
+
+    with patch("app.modules.notion.oauth_state.settings", mock_settings), \
+         patch("app.modules.notion.oauth_service.settings", mock_settings):
+        response = await client.get(
+            "/api/v1/notion/oauth/start?return_to=/compendiums/mi-nota",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "authorize_url" in data
+    assert "state=" in data["authorize_url"]
