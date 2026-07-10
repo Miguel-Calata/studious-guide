@@ -142,16 +142,13 @@ class NotionClientWrapper:
                 children = []
                 for r in [header] + body:
                     row_cells = [
-                        {
-                            "type": "text",
-                            "text": {"content": self._clean_inline(c)},
-                        }
+                        self._rich_text(self._clean_inline(c))
                         for c in r
                     ]
                     children.append(
                         {
                             "type": "table_row",
-                            "table_row": {"cells": [row_cells]},
+                            "table_row": {"cells": row_cells},
                         }
                     )
                 blocks.append(

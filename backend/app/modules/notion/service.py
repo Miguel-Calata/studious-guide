@@ -37,8 +37,8 @@ async def _raise_notion_api_error(
 ) -> None:
     """Convert Notion API errors into clean HTTP exceptions.
 
-    If the error is a 401 (token invalid/expired/revoked), mark the user's
-    config as disconnected and raise 409 so the frontend can prompt reconnect.
+    401 → marks config disconnected and raises 409 (frontend prompts reconnect).
+    Other errors → mapped to appropriate HTTP codes with human-readable detail.
     """
     if exc.status == 401:
         if config is not None:
@@ -49,7 +49,25 @@ async def _raise_notion_api_error(
             status_code=status.HTTP_409_CONFLICT,
             detail="La sesión de Notion ha expirado. Reconecta tu cuenta.",
         ) from exc
-    raise exc
+
+    raw_msg = (getattr(exc, "message", "") or "").strip()
+    msg = raw_msg[:300] if raw_msg else f"Notion devolvió un error (status {exc.status})."
+
+    if exc.status == 400:
+        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    elif exc.status == 404:
+        status_code = status.HTTP_404_NOT_FOUND
+        msg = "La página o el recurso de Notion no existe o no está compartido con la integración."
+    elif exc.status == 429:
+        status_code = status.HTTP_429_TOO_MANY_REQUESTS
+        msg = "Notion limitó las peticiones (rate limit). Inténtalo de nuevo en unos minutos."
+    elif exc.status and 500 <= exc.status < 600:
+        status_code = status.HTTP_502_BAD_GATEWAY
+        msg = "Notion no está disponible (error del servidor de Notion)."
+    else:
+        status_code = status.HTTP_502_BAD_GATEWAY
+
+    raise HTTPException(status_code=status_code, detail=msg) from exc
 
 
 async def get_notion_config(

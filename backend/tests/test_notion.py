@@ -1085,3 +1085,147 @@ async def test_ensure_fresh_token_skips_refresh_when_fresh(client, db_session):
         )
 
     assert response.status_code == 200
+
+
+# ─── Markdown table → Notion blocks ───
+
+
+def test_md_to_notion_blocks_table_width_and_cells():
+    from app.modules.notion.client import NotionClientWrapper
+
+    md = (
+        "| Columna A | Columna B | Columna C |\n"
+        "| --- | --- | --- |\n"
+        "| 1 | 2 | 3 |\n"
+        "| **bold** | _italic_ | plain |\n"
+    )
+    blocks = NotionClientWrapper("dummy")._md_to_notion_blocks(md)
+
+    table = [b for b in blocks if b["type"] == "table"]
+    assert len(table) == 1
+    table_block = table[0]["table"]
+    assert table_block["table_width"] == 3
+    assert table_block["has_column_header"] is True
+    rows = table_block["children"]
+    assert len(rows) == 3  # header + 2 body
+    for row in rows:
+        assert row["type"] == "table_row"
+        cells = row["table_row"]["cells"]
+        assert len(cells) == 3  # una celda por columna
+        for cell in cells:
+            assert isinstance(cell, list)
+            assert all(isinstance(seg, dict) and "text" in seg for seg in cell)
+
+
+# ─── Notion error mapping (≠ 401) ───
+
+
+@pytest.mark.asyncio
+async def test_export_returns_422_on_notion_400(client, db_session):
+    token = await _register_and_login(client, "notion-400-export@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(db_session, user_id, connected=True)
+    project_id = await _create_project(client, token, "Notion 400 Test")
+    await _setup_compendium(client, token, project_id, db_session)
+
+    pub = await client.post(
+        f"/api/v1/projects/{project_id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    slug = pub.json()["slug"]
+
+    mock_error = _FakeAPIError(
+        status=400,
+        code="validation_error",
+        message="Number of cells in table row must match the table width of the parent table",
+    )
+
+    with patch(
+        "app.modules.notion.service.NotionClientWrapper"
+    ) as mock_wrapper_cls, patch(
+        "app.modules.notion.service.APIResponseError", _FakeAPIError
+    ):
+        mock_wrapper = mock_wrapper_cls.return_value
+        mock_wrapper.create_page = AsyncMock(side_effect=mock_error)
+
+        response = await client.post(
+            f"/api/v1/public/compendiums/{slug}/export/notion",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 422
+    assert "Number of cells" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_export_returns_404_on_notion_404(client, db_session):
+    token = await _register_and_login(client, "notion-404-export@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(db_session, user_id, connected=True)
+    project_id = await _create_project(client, token, "Notion 404 Test")
+    await _setup_compendium(client, token, project_id, db_session)
+
+    pub = await client.post(
+        f"/api/v1/projects/{project_id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    slug = pub.json()["slug"]
+
+    mock_error = _FakeAPIError(
+        status=404,
+        code="object_not_found",
+        message="Could not find page with ID: parent-page-123",
+    )
+
+    with patch(
+        "app.modules.notion.service.NotionClientWrapper"
+    ) as mock_wrapper_cls, patch(
+        "app.modules.notion.service.APIResponseError", _FakeAPIError
+    ):
+        mock_wrapper = mock_wrapper_cls.return_value
+        mock_wrapper.create_page = AsyncMock(side_effect=mock_error)
+
+        response = await client.post(
+            f"/api/v1/public/compendiums/{slug}/export/notion",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 404
+    assert "no existe" in response.json()["detail"].lower() or \
+        "compartido" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_publish_returns_422_on_notion_400(client, db_session):
+    token = await _register_and_login(client, "notion-400-publish@test.com")
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    await _create_notion_config(db_session, user_id, connected=True)
+    project_id = await _create_project(client, token, "Publish 400 Test")
+    await _setup_compendium(client, token, project_id, db_session)
+
+    mock_error = _FakeAPIError(
+        status=400,
+        code="validation_error",
+        message="body failed validation",
+    )
+
+    with patch(
+        "app.modules.notion.service.NotionClientWrapper"
+    ) as mock_wrapper_cls, patch(
+        "app.modules.notion.service.APIResponseError", _FakeAPIError
+    ):
+        mock_wrapper = mock_wrapper_cls.return_value
+        mock_wrapper.create_page = AsyncMock(side_effect=mock_error)
+
+        response = await client.post(
+            f"/api/v1/projects/{project_id}/publish/notion",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 422
