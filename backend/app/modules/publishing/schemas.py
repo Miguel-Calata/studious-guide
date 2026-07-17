@@ -43,3 +43,13 @@ class PublicSectionResponse(BaseModel):
     section_name: str
     content: str
     dosification: str
+
+
+class SourceDocumentPublic(BaseModel):
+    id: str
+    filename: str
+    document_type: str
+    file_size: int
+    uploaded_at: datetime
+
+    model_config = {"from_attributes": True}

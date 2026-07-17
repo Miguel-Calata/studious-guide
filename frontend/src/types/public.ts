@@ -27,3 +27,11 @@ export interface PublicSectionResponse {
   content: string
   dosification: string
 }
+
+export interface SourceDocumentPublic {
+  id: string
+  filename: string
+  document_type: string
+  file_size: number
+  uploaded_at: string
+}

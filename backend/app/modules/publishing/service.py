@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.compendium_section import CompendiumSection, SectionStatus
 from app.models.project import Project, ProjectStatus
+from app.models.source_document import SourceDocument
 from app.services.storage import StorageBackend
 
 
@@ -195,3 +198,53 @@ async def download_compendium(
     content = await storage.read_bytes(key)
     filename = f"{project.slug}.md"
     return filename, content
+
+
+async def _get_published_project(db: AsyncSession, slug: str) -> Project:
+    result = await db.execute(
+        select(Project).where(
+            Project.slug == slug, Project.is_published.is_(True)
+        )
+    )
+    project = result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Compendio no encontrado",
+        )
+    return project
+
+
+async def list_compendium_sources(
+    db: AsyncSession,
+    slug: str,
+) -> list[SourceDocument]:
+    project = await _get_published_project(db, slug)
+    result = await db.execute(
+        select(SourceDocument)
+        .where(SourceDocument.project_id == project.id)
+        .order_by(SourceDocument.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def get_compendium_source_stream(
+    db: AsyncSession,
+    slug: str,
+    document_id: str,
+    storage: StorageBackend,
+) -> tuple[str, str, AsyncIterator[bytes]]:
+    project = await _get_published_project(db, slug)
+    result = await db.execute(
+        select(SourceDocument).where(
+            SourceDocument.id == document_id,
+            SourceDocument.project_id == project.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Documento fuente no encontrado",
+        )
+    return doc.filename, doc.file_path, storage.stream(doc.file_path)

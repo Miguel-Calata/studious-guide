@@ -2,6 +2,7 @@ import type {
   PublicCompendiumListItem,
   PublicCompendiumDetail,
   PublicSectionResponse,
+  SourceDocumentPublic,
 } from '@/types/public'
 
 async function publicFetch<T>(path: string): Promise<T> {
@@ -33,4 +34,16 @@ export function getPublicSection(
 
 export function getPublicDownloadUrl(slug: string): string {
   return `/public/compendiums/${encodeURIComponent(slug)}/download`
+}
+
+export function listCompendiumSources(
+  slug: string
+): Promise<SourceDocumentPublic[]> {
+  return publicFetch(
+    `/public/compendiums/${encodeURIComponent(slug)}/sources`
+  )
+}
+
+export function getSourceDownloadUrl(slug: string, documentId: string): string {
+  return `/public/compendiums/${encodeURIComponent(slug)}/sources/${documentId}`
 }

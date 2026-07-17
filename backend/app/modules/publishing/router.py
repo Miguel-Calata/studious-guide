@@ -1,21 +1,26 @@
 from fastapi import APIRouter, Depends, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_storage
 from app.models.project import Project
+from app.models.user import User
+from app.modules.auth.dependencies import get_current_user
 from app.modules.publishing.dependencies import get_project_for_publish
 from app.modules.publishing.schemas import (
     PublicCompendiumDetail,
     PublicCompendiumListItem,
     PublicSectionResponse,
     PublishResponse,
+    SourceDocumentPublic,
 )
 from app.modules.publishing.service import (
     download_compendium,
+    get_compendium_source_stream,
     get_public_compendium,
     get_public_section,
+    list_compendium_sources,
     list_public_compendiums,
     publish_compendium,
 )
@@ -93,3 +98,37 @@ async def get_section(
         "content": section.content,
         "dosification": section.dosification,
     }
+
+
+@public_router.get(
+    "/public/compendiums/{slug}/sources",
+    response_model=list[SourceDocumentPublic],
+)
+async def list_sources(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    return await list_compendium_sources(db, slug)
+
+
+@public_router.get(
+    "/public/compendiums/{slug}/sources/{document_id}",
+)
+async def download_source(
+    slug: str,
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    storage: StorageBackend = Depends(get_storage),
+    _user: User = Depends(get_current_user),
+):
+    filename, file_uri, stream = await get_compendium_source_stream(
+        db, slug, document_id, storage
+    )
+    return StreamingResponse(
+        content=stream,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )

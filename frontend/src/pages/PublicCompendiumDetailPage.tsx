@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MarkdownViewer } from '@/components/public/MarkdownViewer'
+import { SourcesPanel } from '@/components/compendium/SourcesPanel'
 import {
   getPublicCompendium,
   getPublicSection,
@@ -277,6 +278,8 @@ export function PublicCompendiumDetailPage() {
           ))}
         </div>
       </div>
+
+      <SourcesPanel slug={slug} />
     </div>
   )
 }

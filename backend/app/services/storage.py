@@ -34,9 +34,11 @@ For S3 / MinIO:
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlparse
 
+import aiofiles
 from botocore.exceptions import ClientError
 from fastapi import UploadFile
 
@@ -75,6 +77,15 @@ class StorageBackend(ABC):
     def get_local_path(self, file_uri: str) -> Path:
         """Resolve URI to a local filesystem path for reading, if supported."""
         ...
+
+    async def stream(self, file_uri: str) -> AsyncIterator[bytes]:
+        """Stream file contents in chunks (64KB).
+
+        Default raises NotImplementedError. Override in subclass.
+        """
+        raise NotImplementedError
+        if False:  # pragma: no cover
+            yield b""
 
 
 class LocalStorageBackend(StorageBackend):
@@ -116,6 +127,12 @@ class LocalStorageBackend(StorageBackend):
             raise ValueError(f"Invalid local URI: {file_uri}")
         relative = file_uri.removeprefix("local://")
         return self.base_path / relative
+
+    async def stream(self, file_uri: str) -> AsyncIterator[bytes]:
+        path = self.get_local_path(file_uri)
+        async with aiofiles.open(path, "rb") as f:
+            while chunk := await f.read(64 * 1024):
+                yield chunk
 
 
 class S3StorageBackend(StorageBackend):
@@ -216,6 +233,15 @@ class S3StorageBackend(StorageBackend):
             response = await client.get_object(Bucket=bucket, Key=key)
             async with response["Body"] as stream:
                 return await stream.read()
+
+    async def stream(self, file_uri: str) -> AsyncIterator[bytes]:
+        await self._ensure_bucket_once()
+        bucket, key = self._parse_uri(file_uri)
+        async with self._client() as client:
+            response = await client.get_object(Bucket=bucket, Key=key)
+            async with response["Body"] as body:
+                async for chunk in body.iter_chunks(chunk_size=64 * 1024):
+                    yield chunk
 
     async def delete(self, file_uri: str) -> None:
         await self._ensure_bucket_once()
