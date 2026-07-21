@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"  # "lax" permite navegación cross-site controlada
     cookie_domain: str | None = None
 
+    # Ecos Map auto-propose
+    ecos_map_max_source_chars: int = 200_000
+
     # App
     debug: bool = False
 

@@ -6,16 +6,22 @@ Funciones:
     una clave estable para lookup.
   - `get_active_ecos_map(db, pathology_key)`: obtiene el mapa
     aprobado+activo actual (None si no existe).
-  - `propose_ecos_map(db, ai, pathology_name)`: genera un borrador
-    vía mini-prompt LLM y lo guarda como `draft` (origen
-    `autopopulated`).
+  - `get_pending_draft(db, pathology_key)`: obtiene el borrador
+    pendiente (draft, no activo) más reciente para una patología.
+  - `propose_ecos_map(db, ai, pathology_name, source_content)`:
+    genera un borrador vía mini-prompt LLM y lo guarda como
+    `draft` (origen `autopopulado`). Acepta contenido fuente
+    opcional (merged_content) para proponer ecos grounded.
+  - `update_ecos_map_draft(db, map_id, sections, description)`:
+    edita un borrador existente (draft-only).
   - `validate_ecos_map(draft)`: garantiza cobertura completa de
     los slots del template y propiedad única por sección.
   - `approve_ecos_map(db, map_id, approver_user_id)`: marca como
     approved, asigna versión incrementada, desactiva versiones
     previas.
   - `require_approved_map(db, pathology_key)`: usado por el
-    pipeline; lanza HTTPException 409 si no hay mapa aprobado.
+    pipeline; lanza EcoMapNotApprovedError si no hay mapa
+    aprobado.
 
 Restricción dura implementada en `validate_ecos_map`: ningún slot
 del template puede quedar sin dueño. Si un slot no aparece, se
@@ -140,6 +146,24 @@ async def get_active_ecos_map(
     return result.scalar_one_or_none()
 
 
+async def get_pending_draft(
+    db: AsyncSession, pathology_key: str
+) -> EcosMap | None:
+    """Obtiene el borrador pendiente (draft, no activo) más reciente."""
+    if not pathology_key:
+        return None
+    result = await db.execute(
+        select(EcosMap)
+        .where(
+            EcosMap.pathology_key == pathology_key,
+            EcosMap.status == EcosMapStatus.DRAFT,
+            EcosMap.is_active == False,  # noqa: E712
+        )
+        .order_by(EcosMap.version.desc())
+    )
+    return result.scalars().first()
+
+
 async def require_approved_map(
     db: AsyncSession, pathology_key: str
 ) -> EcosMap:
@@ -168,23 +192,26 @@ async def propose_ecos_map(
     db: AsyncSession,
     ai: AIGatewayClient,
     pathology_name: str,
+    source_content: str | None = None,
 ) -> EcosMap:
     """
     Genera un borrador de ecos map vía mini-prompt LLM. El
     `ecos_map_autopopulate` debe estar sembrado en
     `prompt_templates` (type='ecos_map').
 
-    Nunca se invoca desde el pipeline de producción; sólo desde
-    el endpoint humano de propuesta.
+    Si se proporciona `source_content` (extracto de merged_content),
+    el LLM priorizará ecos para temas realmente cubiertos por las
+    fuentes documentales del proyecto ("grounded propose").
     """
+    from app.config import settings
+
     prompt = await get_active_prompt(db, "ecos_map_autopopulate")
     if prompt is None:
         raise RuntimeError(
             "Prompt 'ecos_map_autopopulate' no encontrado en "
-            "prompt_templates. Aplica la migración 011."
+            "prompt_templates. Aplica la migración 011 o 013."
         )
 
-    system_prompt = await get_active_prompt(db, "system_prompt_sam_v9")
     template_json = json.dumps(
         {
             section_number: [
@@ -196,9 +223,29 @@ async def propose_ecos_map(
         ensure_ascii=False,
     )
 
+    source_block = ""
+    if source_content and source_content.strip():
+        max_chars = settings.ecos_map_max_source_chars
+        excerpt = source_content[:max_chars]
+        truncation = (
+            "\n[... CONTENIDO TRUNCADO ...]"
+            if len(source_content) > max_chars
+            else ""
+        )
+        source_block = (
+            f"\n\nCONTENIDO FUENTE DEL PROYECTO "
+            f"(extractos de guías clínicas subidas):\n"
+            f"{excerpt}{truncation}\n\n"
+            "PRIORIZA los ecos para temas que REALMENTE están "
+            "cubiertos en este contenido fuente. Si un tema del "
+            "template NO aparece en las fuentes, genera el eco "
+            "igual pero anótalo como 'candidato a revisión'."
+        )
+
     user_payload = (
         f"PATOLOGÍA: {pathology_name}\n\n"
-        f"TEMPLATE GENÉRICO:\n{template_json}\n\n"
+        f"TEMPLATE GENÉRICO:\n{template_json}"
+        f"{source_block}\n\n"
         f"Devuelve exclusivamente un JSON válido con la forma "
         f'{{"1": ["..."], "2": ["..."], ..., "11": ["..."]}} '
         f"donde cada lista contiene los ecos (referencias "
@@ -210,7 +257,7 @@ async def propose_ecos_map(
         prompt=user_payload,
         model="google/gemini-3.1-pro-preview",  # default
         temperature=0.1,
-        system_prompt=system_prompt.content,
+        system_prompt=prompt.content,
         max_tokens=8192,
     )
 
@@ -322,6 +369,51 @@ async def approve_ecos_map(
     await db.commit()
     await db.refresh(eco_map)
     return eco_map
+
+
+async def update_ecos_map_draft(
+    db: AsyncSession,
+    map_id: str,
+    sections: dict,
+    description: str | None = None,
+) -> tuple[EcosMap, list[str]]:
+    """
+    Edita un borrador existente (draft-only). Devuelve el mapa
+    actualizado y la lista de problemas de cobertura (warnings).
+    El criterio del doctor manda: puede guardar con warnings.
+    """
+    result = await db.execute(
+        select(EcosMap).where(EcosMap.id == map_id)
+    )
+    eco_map = result.scalar_one_or_none()
+    if eco_map is None:
+        raise EcoMapNotFoundError(f"ecos_map '{map_id}' no existe")
+    if eco_map.status != EcosMapStatus.DRAFT:
+        raise EcoMapNotEditableError(
+            f"Solo se pueden editar borradores "
+            f"(estado actual: {eco_map.status})"
+        )
+
+    _coerce_all_sections(sections)
+    eco_map.sections = sections
+    if description is not None:
+        eco_map.description = description
+
+    _, problems = validate_ecos_map(sections)
+
+    await db.commit()
+    await db.refresh(eco_map)
+    return eco_map, problems
+
+
+def _coerce_all_sections(sections: dict) -> None:
+    """Normaliza in-place los valores de sections a list[str]."""
+    for key in list(sections.keys()):
+        sections[key] = _coerce_ecos_list(sections[key])
+
+
+class EcoMapNotEditableError(Exception):
+    """El ecos_map no está en estado draft; no es editable."""
 
 
 class EcoMapNotFoundError(Exception):

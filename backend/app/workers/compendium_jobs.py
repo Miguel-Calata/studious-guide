@@ -6,13 +6,28 @@ Jobs ARQ para orquestación del compendio completo.
   contexto entre secciones.
 - `regenerate_section_job`: regenera una sección individual
   (cascada R-9 si es la 4 o la 5).
+- `propose_ecos_map_job`: genera un borrador de ecos map
+  grounded en el merged_content del proyecto (auto-propose).
 """
 
 from __future__ import annotations
 
+import structlog
 from arq.connections import ArqRedis
+from sqlalchemy import select
 
+from app.database import async_session
+from app.models.project import Project
+from app.modules.ai_gateway.openrouter_client import OpenRouterClient
+from app.modules.prompts.ecos_service import (
+    get_active_ecos_map,
+    get_pending_draft,
+    pathology_key_for,
+    propose_ecos_map,
+)
 from app.services.orchestrator import PipelineOrchestrator
+
+log = structlog.get_logger()
 
 
 async def _get_arq_pool(ctx: dict) -> ArqRedis | None:
@@ -61,3 +76,79 @@ async def regenerate_section_job(
         "failed": result.failed,
         "section_number": section_number,
     }
+
+
+async def propose_ecos_map_job(
+    ctx: dict,
+    project_id: str,
+) -> dict:
+    """
+    Auto-propose de ecos map grounded en merged_content.
+    Idempotente: no hace nada si ya hay mapa aprobado o borrador
+    pendiente para la patología del proyecto.
+    """
+    async with async_session() as db:
+        project = (
+            await db.execute(
+                select(Project).where(Project.id == project_id)
+            )
+        ).scalar_one_or_none()
+        if project is None:
+            log.warning(
+                "propose_ecos_map_job_project_not_found",
+                project_id=project_id,
+            )
+            return {"status": "skipped", "reason": "project_not_found"}
+
+        pathology_key = pathology_key_for(project.name)
+
+        # Idempotencia: saltar si ya hay mapa aprobado
+        active = await get_active_ecos_map(db, pathology_key)
+        if active is not None:
+            log.info(
+                "propose_ecos_map_job_already_approved",
+                project_id=project_id,
+                pathology_key=pathology_key,
+            )
+            return {"status": "skipped", "reason": "already_approved"}
+
+        # Idempotencia: saltar si ya hay borrador pendiente
+        pending = await get_pending_draft(db, pathology_key)
+        if pending is not None:
+            log.info(
+                "propose_ecos_map_job_draft_exists",
+                project_id=project_id,
+                pathology_key=pathology_key,
+                draft_id=pending.id,
+            )
+            return {"status": "skipped", "reason": "draft_exists"}
+
+        try:
+            ai = OpenRouterClient()
+            eco_map = await propose_ecos_map(
+                db,
+                ai,
+                project.name,
+                source_content=project.merged_content,
+            )
+            log.info(
+                "propose_ecos_map_job_completed",
+                project_id=project_id,
+                pathology_key=pathology_key,
+                ecos_map_id=eco_map.id,
+                version=eco_map.version,
+            )
+            return {
+                "status": "completed",
+                "ecos_map_id": eco_map.id,
+                "version": eco_map.version,
+                "pathology_key": pathology_key,
+            }
+        except Exception:
+            log.error(
+                "propose_ecos_map_job_failed",
+                project_id=project_id,
+                pathology_key=pathology_key,
+                exc_info=True,
+            )
+            return {"status": "failed", "reason": "llm_error"}

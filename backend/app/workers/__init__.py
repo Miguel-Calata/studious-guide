@@ -19,6 +19,7 @@ from app.config import settings
 from app.models import (  # noqa: F401  (ensure all mappers configure)
     Base,
     CompendiumSection,
+    EcosMap,
     Extraction,
     NotionConfig,
     Project,
@@ -28,6 +29,7 @@ from app.models import (  # noqa: F401  (ensure all mappers configure)
 )
 from app.workers.compendium_jobs import (
     generate_compendium,
+    propose_ecos_map_job,
     regenerate_section_job,
 )
 from app.workers.extraction_worker import audit_extraction, extract_document
@@ -39,6 +41,7 @@ __all__ = [
     "audit_extraction",
     "generate_compendium",
     "regenerate_section_job",
+    "propose_ecos_map_job",
 ]
 
 
@@ -57,6 +60,7 @@ class WorkerSettings:
         audit_extraction,
         generate_compendium,
         regenerate_section_job,
+        propose_ecos_map_job,
     ]
     max_jobs = 10
     job_timeout = 1800

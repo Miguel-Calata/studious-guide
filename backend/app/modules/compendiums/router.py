@@ -37,8 +37,9 @@ router = APIRouter(tags=["Compendiums"])
 async def merge(
     project: Project = Depends(get_project_for_compendium),
     db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis | None = Depends(get_arq_pool),
 ) -> dict:
-    result = await merge_extractions(db, project)
+    result = await merge_extractions(db, project, arq_pool)
     proj = result["project"]
     return {
         "project_id": str(proj.id),
@@ -46,6 +47,7 @@ async def merge(
         "extraction_count": proj.merged_content.count("\n\n") + 1 if proj.merged_content else 0,
         "project_status": proj.status,
         "warnings": result.get("warnings", []),
+        "ecos_map_enqueued": result.get("ecos_map_enqueued", False),
     }
 
 

@@ -1,3 +1,4 @@
+import logging
 import re
 
 from fastapi import HTTPException, status
@@ -10,9 +11,12 @@ from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
 from app.modules.prompts.ecos_service import (
     get_active_ecos_map,
+    get_pending_draft,
     pathology_key_for,
 )
 from app.modules.prompts.section_builder import DOSIFICATION_MAP, SECTION_CONFIGS
+
+log = logging.getLogger(__name__)
 
 MARCADOR_CONTINUACION = re.compile(r"\[CONTINÚA.*?\]", re.IGNORECASE | re.DOTALL)
 FIN_PARTE_MARKER = re.compile(r"\[Fin de la Parte[^\]]*\]", re.IGNORECASE | re.DOTALL)
@@ -32,6 +36,7 @@ def sanitize_section_content(content: str) -> str:
 async def merge_extractions(
     db: AsyncSession,
     project: Project,
+    arq_pool=None,
 ) -> dict:
     if project.status not in (
         ProjectStatus.DRAFT,
@@ -86,7 +91,39 @@ async def merge_extractions(
     project.merged_content = merged
     await db.commit()
     await db.refresh(project)
-    return {"project": project, "warnings": warnings}
+
+    # Auto-propose ecos map draft en background si no hay mapa
+    # aprobado ni borrador pendiente para esta patología.
+    ecos_map_enqueued = False
+    if arq_pool is not None:
+        pathology_key = pathology_key_for(project.name)
+        active_map = await get_active_ecos_map(db, pathology_key)
+        pending = await get_pending_draft(db, pathology_key)
+        if active_map is None and pending is None:
+            try:
+                await arq_pool.enqueue_job(
+                    "propose_ecos_map_job",
+                    project_id=str(project.id),
+                    _job_id=f"propose_ecos_map_{pathology_key}",
+                )
+                ecos_map_enqueued = True
+                log.info(
+                    "ecos_map_auto_propose_enqueued",
+                    project_id=str(project.id),
+                    pathology_key=pathology_key,
+                )
+            except Exception:
+                log.warning(
+                    "ecos_map_auto_propose_enqueue_failed",
+                    project_id=str(project.id),
+                    exc_info=True,
+                )
+
+    return {
+        "project": project,
+        "warnings": warnings,
+        "ecos_map_enqueued": ecos_map_enqueued,
+    }
 
 
 async def generate_sections(
@@ -111,19 +148,53 @@ async def generate_sections(
         )
 
     # Tarea 3: bloquear 409 si no hay ecos map aprobado para esta
-    # patología. El pipeline NUNCA regenera el mapa en caliente;
-    # el clínico debe aprobar un borrador (vía endpoint dedicado)
-    # antes de poder generar.
+    # patología. Con auto-propose activado, el borrador se genera
+    # tras merge; si aún no está aprobado, el usuario debe
+    # revisarlo y aprobarlo antes de poder generar.
     pathology_key = pathology_key_for(project.name)
     eco_map = await get_active_ecos_map(db, pathology_key)
     if eco_map is None:
+        # Verificar si hay un borrador pendiente de revisión
+        pending = await get_pending_draft(db, pathology_key)
+        if pending is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Hay un borrador del ecos map pendiente de "
+                    f"revisión y aprobación para '{project.name}' "
+                    f"(id='{pending.id}', v{pending.version}). "
+                    f"Revísalo y apruébalo con "
+                    f"POST /api/v1/ecos-maps/{pending.id}/approve "
+                    f"antes de generar."
+                ),
+            )
+        # Sin mapa ni borrador: fallback — encolar auto-propose
+        if arq_pool is not None:
+            try:
+                await arq_pool.enqueue_job(
+                    "propose_ecos_map_job",
+                    project_id=str(project.id),
+                    _job_id=f"propose_ecos_map_{pathology_key}",
+                )
+            except Exception:
+                log.warning(
+                    "ecos_map_fallback_propose_failed",
+                    project_id=str(project.id),
+                    exc_info=True,
+                )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"No existe ecos_map aprobado para la patología "
-                f"'{project.name}' (key='{pathology_key}'). Genera un "
-                f"borrador con POST /api/v1/pathologies/{pathology_key}/"
-                f"ecos-map:propose y apruébalo antes de generar."
+                f"'{project.name}' (key='{pathology_key}'). "
+                + (
+                    "Se ha generado un borrador en segundo plano; "
+                    "revísalo y apruébalo cuando esté listo."
+                    if arq_pool is not None
+                    else "Genera un borrador con "
+                    f"POST /api/v1/pathologies/{pathology_key}/"
+                    f"ecos-map:propose y apruébalo antes de generar."
+                )
             ),
         )
 

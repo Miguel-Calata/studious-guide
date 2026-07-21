@@ -6,14 +6,16 @@ Endpoints:
           → genera borrador vía mini-prompt LLM (draft, no activo)
   POST   /api/v1/ecos-maps/{id}/approve
           → aprueba y activa un borrador (desactiva anteriores)
+  PUT    /api/v1/ecos-maps/{id}
+          → edita un borrador (draft-only)
   GET    /api/v1/pathologies/{key}/ecos-map
           → mapa aprobado activo actual
   GET    /api/v1/pathologies/{key}/ecos-maps
           → historial de todas las versiones
 """
 
-
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,12 +24,33 @@ from app.models.ecos_map import EcosMap
 from app.modules.ai_gateway.openrouter_client import OpenRouterClient
 from app.modules.auth.dependencies import get_current_user
 from app.modules.prompts.ecos_service import (
+    EcoMapNotEditableError,
+    EcoMapNotFoundError,
     approve_ecos_map,
     get_active_ecos_map,
+    get_pending_draft,
     propose_ecos_map,
+    update_ecos_map_draft,
 )
 
 router = APIRouter(tags=["Ecos Maps"])
+
+
+class EcosMapUpdateRequest(BaseModel):
+    sections: dict[str, list[str]] = Field(
+        ..., description="Ecos por sección: {'1': [...], ..., '11': [...]}"
+    )
+    description: str | None = Field(
+        default=None, max_length=1000
+    )
+
+
+class EcosMapUpdateResponse(BaseModel):
+    ecos_map: dict
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Problemas de cobertura detectados (no bloquean)",
+    )
 
 
 @router.post(
@@ -37,15 +60,13 @@ router = APIRouter(tags=["Ecos Maps"])
 async def propose_eco_map(
     key: str,
     db: AsyncSession = Depends(get_db),  # noqa: B008
-    _user=Depends(get_current_user)  # noqa: B008,
+    _user=Depends(get_current_user),  # noqa: B008
 ) -> dict:
     """
     Genera un borrador de ecos map para una patología nueva usando
     el mini-prompt 'ecos_map_autopopulate'. El borrador queda en
     estado `draft`; requiere aprobación humana explícita.
     """
-    # El `key` es el slug normalizado; el pathology_name humano se
-    # reconstruye capitalizando para el LLM.
     pathology_name = key.replace("-", " ").title()
     ai = OpenRouterClient()
     eco_map = await propose_ecos_map(db, ai, pathology_name)
@@ -56,17 +77,55 @@ async def propose_eco_map(
 async def approve_eco_map(
     ecos_map_id: str,
     db: AsyncSession = Depends(get_db),  # noqa: B008
-    user=Depends(get_current_user)  # noqa: B008,
+    user=Depends(get_current_user),  # noqa: B008
 ) -> dict:
-    eco_map = await approve_ecos_map(db, ecos_map_id, str(user.id))
+    try:
+        eco_map = await approve_ecos_map(db, ecos_map_id, str(user.id))
+    except EcoMapNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"ecos_map '{ecos_map_id}' no encontrado",
+        ) from None
     return _serialize(eco_map)
+
+
+@router.put(
+    "/ecos-maps/{ecos_map_id}",
+    response_model=EcosMapUpdateResponse,
+)
+async def update_eco_map(
+    ecos_map_id: str,
+    body: EcosMapUpdateRequest,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+    _user=Depends(get_current_user),  # noqa: B008
+) -> dict:
+    """
+    Edita un borrador de ecos map (draft-only). Devuelve el mapa
+    actualizado y warnings de cobertura si los hay. El criterio
+    del doctor manda: puede guardar con warnings.
+    """
+    try:
+        eco_map, warnings = await update_ecos_map_draft(
+            db, ecos_map_id, body.sections, body.description
+        )
+    except EcoMapNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"ecos_map '{ecos_map_id}' no encontrado",
+        ) from None
+    except EcoMapNotEditableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
+    return {"ecos_map": _serialize(eco_map), "warnings": warnings}
 
 
 @router.get("/pathologies/{key}/ecos-map")
 async def get_active_eco_map(
     key: str,
     db: AsyncSession = Depends(get_db),  # noqa: B008
-    _user=Depends(get_current_user)  # noqa: B008,
+    _user=Depends(get_current_user),  # noqa: B008
 ) -> dict:
     eco_map = await get_active_ecos_map(db, key)
     if eco_map is None:
@@ -83,7 +142,7 @@ async def get_active_eco_map(
 async def list_eco_maps(
     key: str,
     db: AsyncSession = Depends(get_db),  # noqa: B008
-    _user=Depends(get_current_user)  # noqa: B008,
+    _user=Depends(get_current_user),  # noqa: B008
 ) -> list[dict]:
     result = await db.execute(
         select(EcosMap)
@@ -91,6 +150,22 @@ async def list_eco_maps(
         .order_by(EcosMap.version.desc())
     )
     return [_serialize(m) for m in result.scalars().all()]
+
+
+@router.get("/pathologies/{key}/ecos-map/pending-draft")
+async def get_pending_draft_map(
+    key: str,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+    _user=Depends(get_current_user),  # noqa: B008
+) -> dict:
+    """Devuelve el borrador pendiente (draft) más reciente, o 404."""
+    draft = await get_pending_draft(db, key)
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No hay borrador pendiente para '{key}'.",
+        )
+    return _serialize(draft)
 
 
 def _serialize(eco_map: EcosMap) -> dict:

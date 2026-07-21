@@ -404,3 +404,301 @@ async def test_orchestrator_records_ecos_map_version(
     ).scalar_one()
     if reloaded.status == SectionStatus.COMPLETED:
         assert reloaded.ecos_map_version == "v3"
+
+
+# ── propose_ecos_map con source_content (grounded) ───────────────
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_with_source_content(
+    client, db_session
+):
+    """
+    Propose con source_content incluye el excerpt en el prompt
+    enviado al LLM y usa ecos_map_autopopulate como system prompt.
+    """
+    ai_mock = MagicMock()
+    fake_result = AIResult(
+        content=json.dumps(
+            {
+                str(n): [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[n]]
+                for n in range(1, 12)
+            }
+        ),
+        model="google/gemini-3.1-pro-preview",
+        input_tokens=2000,
+        output_tokens=1500,
+        cost_usd=0.05,
+        finish_reason="stop",
+    )
+    ai_mock.generate = AsyncMock(return_value=fake_result)
+
+    source = "KDIGO 2012 define LRA como aumento de SCr ≥0.3 mg/dL..."
+    eco_map = await propose_ecos_map(
+        db_session, ai_mock, "Insuficiencia Renal Aguda",
+        source_content=source,
+    )
+
+    # Verificar que se llamó al LLM con source_content en el prompt
+    call_kwargs = ai_mock.generate.call_args
+    prompt_sent = call_kwargs.kwargs.get(
+        "prompt", call_kwargs.args[0] if call_kwargs.args else ""
+    )
+    assert "KDIGO 2012" in prompt_sent
+    assert "CONTENIDO FUENTE DEL PROYECTO" in prompt_sent
+
+    # Verificar que el system prompt es ecos_map_autopopulate, NO sam_v9
+    sys_prompt = call_kwargs.kwargs.get("system_prompt", "")
+    assert "MAPA DE ECOS" in sys_prompt
+    assert "Catedrático" not in sys_prompt  # sam_v9 tiene esto
+
+    assert eco_map.status == EcosMapStatus.DRAFT
+    assert eco_map.origin == EcosMapOrigin.AUTOPOPULATED
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_without_source_content(
+    client, db_session
+):
+    """
+    Propose sin source_content no incluye bloque de fuentes.
+    """
+    ai_mock = MagicMock()
+    fake_result = AIResult(
+        content=json.dumps(
+            {
+                str(n): [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[n]]
+                for n in range(1, 12)
+            }
+        ),
+        model="google/gemini-3.1-pro-preview",
+        input_tokens=1000,
+        output_tokens=1000,
+        cost_usd=0.03,
+        finish_reason="stop",
+    )
+    ai_mock.generate = AsyncMock(return_value=fake_result)
+
+    eco_map = await propose_ecos_map(
+        db_session, ai_mock, "EPOC"
+    )
+
+    call_kwargs = ai_mock.generate.call_args
+    prompt_sent = call_kwargs.kwargs.get("prompt", "")
+    assert "CONTENIDO FUENTE" not in prompt_sent
+    assert eco_map.status == EcosMapStatus.DRAFT
+
+
+# ── update_ecos_map_draft ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_ecos_map_draft_updates_sections(
+    client, db_session
+):
+    eco_map = EcosMap(
+        id="draft-edit-1",
+        pathology_key="edit-test",
+        pathology_name="Edit Test",
+        version=1,
+        sections=_full_aki_draft(),
+        status=EcosMapStatus.DRAFT,
+        is_active=False,
+    )
+    db_session.add(eco_map)
+    await db_session.commit()
+
+    from app.modules.prompts.ecos_service import update_ecos_map_draft
+
+    new_sections = _full_aki_draft()
+    new_sections["2"] = ["custom eco for section 2"]
+
+    updated, problems = await update_ecos_map_draft(
+        db_session, eco_map.id, new_sections,
+        description="editado por doctor",
+    )
+    assert updated.sections["2"] == ["custom eco for section 2"]
+    assert updated.description == "editado por doctor"
+    # Problemas de cobertura deben reportarse (slot faltante en sección 2)
+    assert isinstance(problems, list)
+
+
+@pytest.mark.asyncio
+async def test_update_ecos_map_draft_rejects_approved(
+    client, db_session
+):
+    eco_map = EcosMap(
+        id="approved-no-edit",
+        pathology_key="no-edit-test",
+        pathology_name="No Edit",
+        version=1,
+        sections=_full_aki_draft(),
+        status=EcosMapStatus.APPROVED,
+        is_active=True,
+    )
+    db_session.add(eco_map)
+    await db_session.commit()
+
+    from app.modules.prompts.ecos_service import (
+        EcoMapNotEditableError,
+        update_ecos_map_draft,
+    )
+
+    with pytest.raises(EcoMapNotEditableError):
+        await update_ecos_map_draft(
+            db_session, eco_map.id, _full_aki_draft()
+        )
+
+
+# ── get_pending_draft ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_pending_draft_returns_latest(client, db_session):
+    v1 = EcosMap(
+        id="draft-v1",
+        pathology_key="pending-test",
+        pathology_name="Pending",
+        version=1,
+        sections=_full_aki_draft(),
+        status=EcosMapStatus.DRAFT,
+        is_active=False,
+    )
+    v2 = EcosMap(
+        id="draft-v2",
+        pathology_key="pending-test",
+        pathology_name="Pending",
+        version=2,
+        sections=_full_aki_draft(),
+        status=EcosMapStatus.DRAFT,
+        is_active=False,
+    )
+    db_session.add_all([v1, v2])
+    await db_session.commit()
+
+    from app.modules.prompts.ecos_service import get_pending_draft
+
+    draft = await get_pending_draft(db_session, "pending-test")
+    assert draft is not None
+    assert draft.id == "draft-v2"  # latest version
+
+
+@pytest.mark.asyncio
+async def test_get_pending_draft_returns_none_when_only_approved(
+    client, db_session
+):
+    eco_map = EcosMap(
+        id="only-approved",
+        pathology_key="only-approved-test",
+        pathology_name="Only Approved",
+        version=1,
+        sections=_full_aki_draft(),
+        status=EcosMapStatus.APPROVED,
+        is_active=True,
+    )
+    db_session.add(eco_map)
+    await db_session.commit()
+
+    from app.modules.prompts.ecos_service import get_pending_draft
+
+    draft = await get_pending_draft(db_session, "only-approved-test")
+    assert draft is None
+
+
+# ── generate_sections 409 messages ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_generate_sections_409_with_pending_draft(
+    client, db_session
+):
+    """
+    Si hay un borrador pendiente, el 409 menciona el id y versión.
+    """
+    from app.modules.compendiums.service import generate_sections
+
+    user = User(
+        email="pending-msg@test.com",
+        password_hash=hash_password("X"),
+        full_name="PendingMsg",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    project = Project(
+        user_id=user.id,
+        name="Draft Pending Msg",
+        slug="draft-pending-msg",
+        status=ProjectStatus.DRAFT,
+        merged_content="Contenido de prueba",
+    )
+    db_session.add(project)
+
+    draft = EcosMap(
+        id="draft-for-msg",
+        pathology_key="draft-pending-msg",
+        pathology_name="Draft Pending Msg",
+        version=1,
+        sections=_full_aki_draft(),
+        status=EcosMapStatus.DRAFT,
+        is_active=False,
+    )
+    db_session.add(draft)
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_sections(db_session, project, arq_pool=None)
+    assert exc.value.status_code == 409
+    detail = str(exc.value.detail)
+    assert "draft-for-msg" in detail
+    assert "v1" in detail
+
+
+@pytest.mark.asyncio
+async def test_generate_sections_409_without_any_map(
+    client, db_session
+):
+    """
+    Sin mapa ni borrador, el 409 sugiere generar borrador.
+    """
+    from app.modules.compendiums.service import generate_sections
+
+    user = User(
+        email="no-map-msg@test.com",
+        password_hash=hash_password("X"),
+        full_name="NoMapMsg",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    project = Project(
+        user_id=user.id,
+        name="No Map Msg",
+        slug="no-map-msg",
+        status=ProjectStatus.DRAFT,
+        merged_content="Contenido de prueba",
+    )
+    db_session.add(project)
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_sections(db_session, project, arq_pool=None)
+    assert exc.value.status_code == 409
+    assert "ecos_map" in str(exc.value.detail).lower()
+
+
+# ── prompt v2 sembrado ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_autopopulate_prompt_v2_exists(client, db_session):
+    """
+    La migración 013 siembra la v2 de ecos_map_autopopulate como
+    activa (v1 queda inactiva).
+    """
+    from app.modules.prompts.ecos_service import get_active_prompt
+
+    prompt = await get_active_prompt(db_session, "ecos_map_autopopulate")
+    assert prompt.version == 2
+    assert "R1." in prompt.content  # v2 tiene reglas R1-R9
+    assert "MAPA DE ECOS" in prompt.content

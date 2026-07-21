@@ -4,6 +4,54 @@ Registro cronológico de decisiones arquitectónicas, cambios de diseño y desvi
 
 ---
 
+## 2026-07-21 — Auto-propose de ecos map + edición de borrador
+
+### Alcance
+Eliminar el paso manual de `POST /pathologies/{key}/ecos-map:propose` + approve: el sistema genera automáticamente un borrador grounded en el `merged_content` del proyecto tras el merge, y el doctor revisa/edita/aprueba antes de generar.
+
+### Decisiones
+
+| # | Decisión | Justificación | Alternativas |
+|---|----------|---------------|-------------|
+| F-30 | **Auto-propose tras merge (job ARQ)** | El merged_content contiene las fuentes reales; proponer ecos grounded en ese contenido produce un mapa más alineado con el compendio que proponer solo desde el nombre de la patología | Propose al crear proyecto (sin documentos), propose on-demand en generate (bloquea HTTP) |
+| F-31 | **System prompt = `ecos_map_autopopulate` (fix wiring)** | Antes se enviaba `system_prompt_sam_v9` (prompt de secciones clínicas) como system prompt del propose; el template `ecos_map_autopopulate` nunca llegaba al LLM. Ahora sí se envía como system prompt | Mantener sam_v9 (inadecuado para generar ecos) |
+| F-32 | **Endpoint `PUT /ecos-maps/{id}` (draft-only)** | El doctor necesita editar los ecos propuestos antes de aprobar. Solo borradores; aprobados inmutables (nueva versión vía propose) | Editar aprobados (rompe trazabilidad), solo approve sin edición |
+| F-33 | **`GET /pathologies/{key}/ecos-map/pending-draft`** | Endpoint dedicado para que el frontend pueda consultar rápidamente si hay un borrador pendiente sin listar todo el historial | Usar el endpoint de historial + filtrar en cliente |
+| F-34 | **409 diferenciado: draft pendiente vs sin mapa** | El mensaje de error ahora distingue entre "hay un borrador, revísalo" (con id y versión) y "no hay nada, se generó uno en background" | Mensaje genérico (menos accionable) |
+
+### Migraciones
+
+- `013_ecos_autopopulate_v2.py` — v2 del prompt `ecos_map_autopopulate`: reglas más estrictas (R1-R9), sección 1 siempre vacía, soporte para contenido fuente grounded. Desactiva v1.
+
+### Archivos modificados
+
+**Backend (módulos):**
+- `app/config.py` — +`ecos_map_max_source_chars`
+- `app/modules/prompts/ecos_service.py` — fix wiring (system prompt = autopopulate, no sam_v9), +`source_content` en `propose_ecos_map`, +`update_ecos_map_draft`, +`get_pending_draft`, +`EcoMapNotEditableError`
+- `app/modules/prompts/ecos_router.py` — +`PUT /ecos-maps/{id}` (edición draft), +`GET /pathologies/{key}/ecos-map/pending-draft`, fix approve 404 (era 500)
+- `app/modules/compendiums/service.py` — `merge_extractions` encola auto-propose tras merge si no hay mapa aprobado ni borrador; `generate_sections` 409 diferenciado (draft pendiente con id vs sin mapa con fallback)
+- `app/modules/compendiums/router.py` — merge pasa `arq_pool` al servicio
+- `app/modules/compendiums/schemas.py` — `MergeResponse.ecos_map_enqueued`
+- `app/workers/compendium_jobs.py` — +`propose_ecos_map_job` (idempotente, grounded en merged_content)
+- `app/workers/__init__.py` — registra `propose_ecos_map_job` + import `EcosMap`
+
+### Archivos nuevos
+
+- `backend/alembic/versions/013_ecos_autopopulate_v2.py`
+
+### Tests
+
+- 9 tests nuevos en `tests/test_ecos_map.py`: propose con/sin source_content, wiring del system prompt, update_draft (ok + rechaza aprobado), get_pending_draft (con borradores + solo aprobado), generate 409 diferenciado (draft pendiente vs sin mapa), prompt v2 sembrado.
+- 201 tests totales pasando.
+
+### Notas
+
+- La aprobación sigue siendo 100% humana (F-26/F-27 intactas). Solo la *propuesta* se automatiza.
+- `propose_ecos_map_job` es idempotente: no hace nada si ya hay mapa aprobado o borrador pendiente.
+- El frontend de revisión/edición/aprobación queda documentado en `docs/14_ecos_map_review_frontend.md` para implementación futura.
+
+---
+
 ## 2026-07-21 — Sprint 12: Cierre de brechas auditoría clínica AKI + auditoría técnica interna
 
 ### Alcance

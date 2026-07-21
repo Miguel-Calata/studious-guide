@@ -46,6 +46,10 @@ class MergeResponse(BaseModel):
     extraction_count: int
     project_status: str
     warnings: list[str] = Field(default_factory=list)
+    ecos_map_enqueued: bool = Field(
+        default=False,
+        description="True si se encoló un auto-propose de ecos map",
+    )
 
 
 class GenerateResponse(BaseModel):

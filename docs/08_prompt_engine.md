@@ -75,11 +75,10 @@ El modo standalone (no hilo) sigue disponible vía
 `build_section_prompt` para compatibilidad con tests y casos
 legacy.
 
-### 6. MAPA DE ECOS como entidad versionada (Sprint 12)
+### 6. MAPA DE ECOS como entidad versionada (Sprint 12+)
 
-A partir del Sprint 12, el `MAPA_ECOS` deja de estar hardcoded
-en `SECTION_CONFIGS` y pasa a vivir en una tabla versionada
-`ecos_maps` con el siguiente esquema:
+El `MAPA_ECOS` vive en la tabla versionada `ecos_maps` con el
+siguiente esquema:
 
 ```
 ecos_maps:
@@ -97,40 +96,47 @@ ecos_maps:
 
 Las versiones siguen el mismo patrón que `prompt_templates`: una
 nueva versión desactiva la anterior; la activa es la única que el
-pipeline consume. La trazabilidad se registra en
-`compendium_sections.ecos_map_version` por sección generada.
+pipeline consume.
 
-**Flujo humano:**
-1. `POST /api/v1/pathologies/{key}/ecos-map:propose` —
-   genera un borrador (status=draft, origin=autopopulated)
-   usando el mini-prompt `ecos_map_autopopulate` sembrado en
-   `prompt_templates` con `type='ecos_map'`. El borrador está
-   basado en `ECOS_SECTION_TEMPLATE` (slots agnósticos de
-   patología, `app/modules/prompts/ecos_template.py`).
-2. Revisión humana del draft.
-3. `POST /api/v1/ecos-maps/{id}/approve` — marca
-   status=approved, is_active=true, desactiva la versión
-   anterior de la misma patología. Registra `approved_by` y
-   `approved_at`.
+**Flujo automático (post-merge):**
+1. El usuario sube documentos → extrae → hace merge.
+2. El merge encola automáticamente un job ARQ
+   `propose_ecos_map_job` que genera un borrador grounded en el
+   `merged_content` del proyecto (contenido real de las guías
+   clínicas subidas). El job es idempotente: no hace nada si ya
+   hay mapa aprobado o borrador pendiente.
+3. El doctor revisa el borrador (`GET /pathologies/{key}/ecos-map/
+   pending-draft`), edita si necesita (`PUT /ecos-maps/{id}`),
+   y aprueba (`POST /ecos-maps/{id}/approve`).
+4. Generar compendio requiere mapa aprobado (409 si no lo hay,
+   con mensaje diferenciado según haya borrador pendiente o no).
 
-**Restricción dura:** el pipeline NUNCA regenera un mapa en
-caliente. Si no existe mapa aprobado activo para la patología
-del proyecto al intentar generar, el endpoint devuelve
-`HTTP 409 Conflict` con mensaje accionable que apunta al
-endpoint de propuesta. La generación queda bloqueada.
+**Flujo manual (sigue disponible):**
+1. `POST /api/v1/pathologies/{key}/ecos-map:propose` — genera
+   borrador (draft, no activo). Acepta `source_content` opcional
+   para grounded propose.
+2. `PUT /api/v1/ecos-maps/{id}` — edita secciones/description
+   del borrador (draft-only). Devuelve warnings de cobertura.
+3. `POST /api/v1/ecos-maps/{id}/approve` — marca approved,
+   is_active=true, desactiva versión anterior.
+
+**Fix de wiring (v2 del prompt):**
+El system prompt enviado al LLM para generar el mapa era
+`system_prompt_sam_v9` (diseñado para escribir secciones clínicas,
+no para generar ecos). El template `ecos_map_autopopulate` se
+cargaba pero nunca llegaba al modelo. Corregido: ahora el
+contenido de `ecos_map_autopopulate` v2 (reglas R1-R9) se envía
+como system prompt. La v2 incluye reglas más estrictas y soporte
+para contenido fuente grounded.
 
 **Validación de cobertura:** `validate_ecos_map(draft)` garantiza
 que cada slot del `ECOS_SECTION_TEMPLATE` aparezca en los ecos
-de su sección dueña. La plantilla define la propiedad única:
-cada slot tiene exactamente una sección dueña. La cláusula
-"mención ≠ desarrollo" se inyecta en el bloque de ecos de cada
-sección: la sección dueña SIEMPRE desarrolla su tema completo,
-aunque otra lo haya mencionado tangencialmente.
+de su sección dueña. Los warnings se reportan pero no bloquean
+el guardado (el criterio del doctor manda).
 
-**Seed AKI:** la migración 011 siembra el mapa AKI v1 copiando
-byte a byte el contenido de `SECTION_CONFIGS[*].ecos` original.
-Cualquier patología nueva requiere un borrador aprobado antes
-de poder generar.
+**Seed AKI:** la migración 011 siembra el mapa AKI v1. La
+migración 013 siembra la v2 del prompt autopopulate. Cualquier
+patología nueva recibe auto-propose tras merge.
 
 ---
 
