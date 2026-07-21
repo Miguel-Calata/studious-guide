@@ -30,3 +30,4 @@ export const MODELS: AiModel[] = [
 ]
 
 export const DEFAULT_MODEL = 'google/gemini-3.1-pro-preview'
+export const DEFAULT_CLAUDE_MODEL = 'anthropic/claude-sonnet-5'

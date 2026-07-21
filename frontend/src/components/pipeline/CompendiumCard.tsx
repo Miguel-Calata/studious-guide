@@ -11,7 +11,7 @@ import { SectionList } from '@/components/sections/SectionList'
 import { SectionEditor } from '@/components/sections/SectionEditor'
 import { mergeProject, generateProject, getSections } from '@/api/compendiums'
 import { getModels, type AiModel } from '@/api/ai'
-import { DEFAULT_MODEL } from '@/config/models'
+import { DEFAULT_MODEL, DEFAULT_CLAUDE_MODEL } from '@/config/models'
 import { readModelPref, writeModelPref } from '@/lib/modelPrefs'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { isProjectBusy, POLL_INTERVAL_MS } from '@/lib/pipeline'
@@ -38,7 +38,7 @@ export function CompendiumCard({
     readModelPref('gemini', DEFAULT_MODEL)
   )
   const [selectedClaude, setSelectedClaude] = useState<string>(() =>
-    readModelPref('claude', DEFAULT_MODEL)
+    readModelPref('claude', DEFAULT_CLAUDE_MODEL)
   )
 
   const { data: sections, mutate: mutateSections } = useSWR<CompendiumSection[]>(
@@ -190,6 +190,7 @@ export function CompendiumCard({
             section={selected}
             open={selected !== null}
             onOpenChange={(o) => !o && setSelected(null)}
+            models={models}
             onSaved={(updated) => {
               mutateSections(
                 (prev) =>

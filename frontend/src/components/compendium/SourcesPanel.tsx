@@ -9,7 +9,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { listCompendiumSources, getSourceDownloadUrl } from '@/api/public'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/lib/utils'
-import type { SourceDocumentPublic } from '@/types/public'
 
 interface SourcesPanelProps {
   slug: string

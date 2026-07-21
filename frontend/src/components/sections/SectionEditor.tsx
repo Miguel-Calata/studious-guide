@@ -10,9 +10,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ModelSelect } from '@/components/ui/model-select'
 import { updateSection, regenerateSection } from '@/api/compendiums'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { dosificationLabel } from '@/lib/pipeline'
+import { readModelPref, writeModelPref } from '@/lib/modelPrefs'
+import { DEFAULT_MODEL, DEFAULT_CLAUDE_MODEL } from '@/config/models'
+import type { AiModel } from '@/api/ai'
 import type { CompendiumSection, SectionStatus } from '@/types/compendium'
 
 const REGENERABLE: SectionStatus[] = ['completed', 'failed', 'approved']
@@ -26,15 +30,23 @@ export function SectionEditor({
   open,
   onOpenChange,
   onSaved,
+  models,
 }: {
   section: CompendiumSection
   open: boolean
   onOpenChange: (open: boolean) => void
   onSaved: (section: CompendiumSection) => void
+  models?: AiModel[]
 }) {
   const [content, setContent] = useState(section.content)
   const [saving, setSaving] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
+  const [geminiModel, setGeminiModel] = useState<string>(() =>
+    readModelPref('gemini', DEFAULT_MODEL)
+  )
+  const [claudeModel, setClaudeModel] = useState<string>(() =>
+    readModelPref('claude', DEFAULT_CLAUDE_MODEL)
+  )
 
   useEffect(() => {
     if (open) setContent(section.content)
@@ -65,7 +77,10 @@ export function SectionEditor({
   async function handleRegenerate() {
     setRegenerating(true)
     try {
-      const updated = await regenerateSection(section.id)
+      const updated = await regenerateSection(section.id, {
+        gemini_model: geminiModel,
+        claude_model: claudeModel,
+      })
       notifySuccess(`Sección ${section.section_number} en regeneración.`)
       onSaved(updated)
       onOpenChange(false)
@@ -93,6 +108,41 @@ export function SectionEditor({
         {section.status === 'failed' && section.error_message && (
           <div className="rounded-xl border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {section.error_message}
+          </div>
+        )}
+
+        {canRegenerate && (models?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm text-muted-foreground" htmlFor="section-gemini-model">
+                Motor Gemini
+              </label>
+              <ModelSelect
+                id="section-gemini-model"
+                value={geminiModel}
+                onChange={(v) => {
+                  setGeminiModel(v)
+                  writeModelPref('gemini', v)
+                }}
+                options={models!}
+                disabled={regenerating || saving}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm text-muted-foreground" htmlFor="section-claude-model">
+                Motor Claude
+              </label>
+              <ModelSelect
+                id="section-claude-model"
+                value={claudeModel}
+                onChange={(v) => {
+                  setClaudeModel(v)
+                  writeModelPref('claude', v)
+                }}
+                options={models!}
+                disabled={regenerating || saving}
+              />
+            </div>
           </div>
         )}
 

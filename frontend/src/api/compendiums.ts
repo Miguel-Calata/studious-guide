@@ -35,7 +35,8 @@ export function updateSection(
 }
 
 export function regenerateSection(
-  id: string
+  id: string,
+  body?: { gemini_model?: string; claude_model?: string }
 ): Promise<CompendiumSection> {
-  return api.post<CompendiumSection>(`/sections/${id}/regenerate`)
+  return api.post<CompendiumSection>(`/sections/${id}/regenerate`, body)
 }
