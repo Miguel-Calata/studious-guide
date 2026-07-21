@@ -28,9 +28,9 @@ from app.services.orchestrator import (
 
 def test_estimate_tokens_simple():
     assert estimate_tokens("") == 0
-    assert estimate_tokens("a" * 4) == 1
-    assert estimate_tokens("a" * 400) == 100
-    assert estimate_tokens("a" * 401) >= 100
+    assert estimate_tokens("a" * 7) == 2  # 7*2//7 = 2
+    assert estimate_tokens("a" * 350) == 100  # 350*2//7 = 100
+    assert estimate_tokens("a" * 351) >= 100
 
 
 def test_conversation_from_initial():
@@ -358,23 +358,28 @@ def test_infer_motor_from_model_id():
 
 
 def test_extra_params_thinking_for_claude_red():
-    params = _build_extra_params("claude", 3)
+    params = _build_extra_params("claude", 3, "anthropic/claude-sonnet-5")
     assert "reasoning" in params
     assert params["reasoning"]["enabled"] is True
     assert params["reasoning"]["max_tokens"] == 16000
 
 
 def test_extra_params_no_thinking_for_gemini():
-    assert _build_extra_params("gemini", 3) == {}
+    assert _build_extra_params("gemini", 3, "google/gemini-3.1-pro-preview") == {}
 
 
 def test_extra_params_no_thinking_for_claude_non_red():
     # Sección 4 es 🟢 para claude-mapped... espera, sección 4 es gemini.
     # Verificamos una sección 🟢: sección 1 (epidemiología)
-    assert _build_extra_params("claude", 1) == {}
+    assert _build_extra_params("claude", 1, "anthropic/claude-sonnet-5") == {}
+
+
+def test_extra_params_no_thinking_when_model_not_claude():
+    # Motor claude pero modelo Gemini → no reasoning
+    assert _build_extra_params("claude", 3, "google/gemini-3.1-pro-preview") == {}
 
 
 def test_extra_params_thinking_all_red_sections():
     for n in (3, 5, 8, 9):
-        params = _build_extra_params("claude", n)
+        params = _build_extra_params("claude", n, "anthropic/claude-sonnet-5")
         assert params.get("reasoning", {}).get("enabled") is True

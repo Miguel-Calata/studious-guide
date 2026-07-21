@@ -24,13 +24,15 @@ TRUNCATION_FINISH_REASONS = {"length"}
 
 def estimate_tokens(text: str) -> int:
     """
-    Estimación conservadora de tokens. Aproximación chars/4, suficiente
-    para guardias de overflow. Documentado como heurística; no reemplaza
-    un tokenizador real (tiktoken, etc.).
+    Estimación conservadora de tokens. Aproximación chars/3.5, más
+    precisa que chars/4 para texto médico en español (tokens más
+    largos por palabras con acentos y terminaciones). Suficiente
+    para guardias de overflow. Documentado como heurística; no
+    reemplaza un tokenizador real (tiktoken, etc.).
     """
     if not text:
         return 0
-    return max(1, len(text) // 4)
+    return max(1, len(text) * 2 // 7)
 
 
 @dataclass(frozen=True)

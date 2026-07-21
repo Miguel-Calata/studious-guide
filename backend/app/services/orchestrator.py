@@ -21,6 +21,7 @@ from app.modules.ai_gateway.errors import format_ai_error
 from app.modules.ai_gateway.interfaces import AIGatewayClient
 from app.modules.ai_gateway.models import DEFAULT_GENERATION_MODEL
 from app.modules.ai_gateway.openrouter_client import OpenRouterClient
+from app.modules.compendiums.service import sanitize_section_content
 from app.modules.prompts.ecos_service import (
     get_active_ecos_map,
     get_ecos_for_section,
@@ -41,7 +42,7 @@ from app.modules.prompts.service import get_active_prompt
 # sobreescriben.
 DEFAULT_MOTOR_MODEL_MAP: dict[str, str] = {
     "gemini": DEFAULT_GENERATION_MODEL,
-    "claude": DEFAULT_GENERATION_MODEL,
+    "claude": "anthropic/claude-sonnet-5",
 }
 
 # Pares de co-generación (R-9): la sección 5 hereda el motor de la 4.
@@ -73,13 +74,16 @@ def _resolve_model_id(
     return motor_model_map.get(motor, DEFAULT_GENERATION_MODEL)
 
 
-def _build_extra_params(motor: str, section_number: int) -> dict:
+def _build_extra_params(motor: str, section_number: int, model_id: str) -> dict:
     """
     Tarea 1: extended thinking REAL para Claude en secciones 🔴.
     OpenRouter espera `reasoning: {enabled: True}` (NO `thinking`
     como decía docs/09 — el formato real es `reasoning`).
+    Solo se activa si el modelo resuelto es realmente un modelo Claude.
     """
     config = SECTION_CONFIGS[section_number]
+    if "claude" not in (model_id or "").lower():
+        return {}
     if motor == "claude" and "🔴" in config.dosification_level:
         return {"reasoning": {"enabled": True, "max_tokens": 16000}}
     return {}
@@ -99,6 +103,7 @@ def _replay_conversation(
     system_prompt: str,
     patch_gemini: str | None,
     source_filename: str,
+    eco_map: object | None = None,
 ) -> Conversation:
     use_gemini_patch = (
         SECTION_CONFIGS[1].motor == "gemini" and patch_gemini is not None
@@ -117,11 +122,13 @@ def _replay_conversation(
         if n >= section_number:
             break
         prior = sections_by_number[n]
+        prior_ecos = get_ecos_for_section(eco_map, n)
         instruction = build_section_instruction(
             section_number=n,
             pathology_name=project.name,
             source_filename=source_filename,
             is_last=(n == 11),
+            ecos=prior_ecos,
         )
         conv.add_user(instruction)
         conv.add_assistant(prior.content or "")
@@ -230,15 +237,10 @@ class PipelineOrchestrator:
             await db.commit()
 
         source_filename = (
-            ", ".join(doc.filename for d in project.documents for doc in [d])
+            ", ".join(doc.filename for doc in project.documents)
             if project.documents
             else "N/A"
         )
-        # Forma equivalente más limpia:
-        if project.documents:
-            source_filename = ", ".join(
-                doc.filename for doc in project.documents
-            )
 
         system_prompt_rec = await get_active_prompt(
             db, "system_prompt_sam_v9"
@@ -330,7 +332,7 @@ class PipelineOrchestrator:
                 )
                 model_id = _resolve_model_id(motor, motor_map)
                 extra_params = _build_extra_params(
-                    motor, section_number
+                    motor, section_number, model_id
                 )
 
                 section_ecos = get_ecos_for_section(
@@ -344,6 +346,7 @@ class PipelineOrchestrator:
                     system_prompt=system_prompt_rec.content,
                     patch_gemini=patch_gemini,
                     source_filename=source_filename,
+                    eco_map=eco_map,
                 )
 
                 instruction = build_section_instruction(
@@ -387,7 +390,19 @@ class PipelineOrchestrator:
                         f"(finish_reason={ai_result.finish_reason})"
                     )
 
-                section.content = ai_result.content
+                if ai_result.finish_reason == "content_filter":
+                    raise ValueError(
+                        f"Sección {section_number} bloqueada por filtro "
+                        f"de contenido del proveedor (content_filter)."
+                    )
+
+                cleaned = sanitize_section_content(ai_result.content)
+                if not cleaned:
+                    raise ValueError(
+                        f"Sección {section_number} devolvió contenido vacío."
+                    )
+
+                section.content = cleaned
                 section.model_used = ai_result.model
                 section.input_tokens = ai_result.input_tokens
                 section.output_tokens = ai_result.output_tokens
@@ -399,6 +414,7 @@ class PipelineOrchestrator:
                     f"v{eco_map.version}" if eco_map else None
                 )
                 section.status = SectionStatus.COMPLETED
+                section.is_stale = False
                 await db.commit()
                 completed += 1
 
@@ -412,9 +428,7 @@ class PipelineOrchestrator:
         # Estado final
         final_status = project.status
         if (
-            len(failed) == 0
-            and completed == 11
-            and project.status == ProjectStatus.GENERATING
+            project.status == ProjectStatus.GENERATING
             and ProjectStatus.is_valid_transition(
                 project.status, ProjectStatus.REVIEW
             )
@@ -471,6 +485,14 @@ class PipelineOrchestrator:
                 section.status = SectionStatus.PENDING
                 section.content = ""
                 section.error_message = None
+
+            # Mark downstream sections as stale (they were generated
+            # from the old content of the section being regenerated).
+            max_target = max(target_sections)
+            for s in sections_map.values():
+                if s.section_number > max_target and s.status == SectionStatus.COMPLETED:
+                    s.is_stale = True
+
             await db.commit()
 
         return await self.generate_all_sections(

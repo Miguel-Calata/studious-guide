@@ -31,14 +31,12 @@ from app.workers.compendium_jobs import (
     regenerate_section_job,
 )
 from app.workers.extraction_worker import audit_extraction, extract_document
-from app.workers.generation_worker import generate_section
 
 __all__ = [
     "WorkerSettings",
     "health_check_task",
     "extract_document",
     "audit_extraction",
-    "generate_section",
     "generate_compendium",
     "regenerate_section_job",
 ]
@@ -57,7 +55,6 @@ class WorkerSettings:
         health_check_task,
         extract_document,
         audit_extraction,
-        generate_section,
         generate_compendium,
         regenerate_section_job,
     ]

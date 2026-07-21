@@ -66,9 +66,17 @@ class NotionClientWrapper:
 
     async def update_page(self, page_id: str, content_markdown: str) -> None:
         """Replace all content of an existing page."""
-        existing = await self.client.blocks.children.list(block_id=page_id)
-        for block in existing.get("results", []):
-            await self.client.blocks.delete(block_id=block["id"])
+        cursor = None
+        while True:
+            kwargs = {"block_id": page_id, "page_size": 100}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            resp = await self.client.blocks.children.list(**kwargs)
+            for block in resp.get("results", []):
+                await self.client.blocks.delete(block_id=block["id"])
+            if not resp.get("has_more"):
+                break
+            cursor = resp.get("next_cursor")
 
         blocks = self._md_to_notion_blocks(content_markdown)
         for i in range(0, len(blocks), 100):
@@ -136,15 +144,14 @@ class NotionClientWrapper:
                     cells = self._parse_table_row(lines[i])
                     table_rows.append(cells)
                     i += 1
-                # first row is header, skip separator row
                 header = table_rows[0]
+                width = len(header)
+                # Skip separator row (index 1) and normalize cell counts
                 body = table_rows[2:] if len(table_rows) >= 3 else table_rows[1:]
                 children = []
                 for r in [header] + body:
-                    row_cells = [
-                        self._rich_text(self._clean_inline(c))
-                        for c in r
-                    ]
+                    padded = (r + [""] * width)[:width]
+                    row_cells = [self._rich_text(c) for c in padded]
                     children.append(
                         {
                             "type": "table_row",
@@ -155,7 +162,7 @@ class NotionClientWrapper:
                     {
                         "type": "table",
                         "table": {
-                            "table_width": len(header),
+                            "table_width": width,
                             "has_column_header": True,
                             "has_row_header": False,
                             "children": children,
@@ -189,7 +196,7 @@ class NotionClientWrapper:
             if re.match(r"^\s*[-*]\s+", line):
                 items = []
                 while i < n and re.match(r"^\s*[-*]\s+", lines[i]):
-                    items.append(self._clean_inline(re.sub(r"^\s*[-*]\s+", "", lines[i])))
+                    items.append(re.sub(r"^\s*[-*]\s+", "", lines[i]))
                     i += 1
                 for it in items:
                     blocks.append(
@@ -204,7 +211,7 @@ class NotionClientWrapper:
             if re.match(r"^\s*\d+\.\s+", line):
                 items = []
                 while i < n and re.match(r"^\s*\d+\.\s+", lines[i]):
-                    items.append(self._clean_inline(re.sub(r"^\s*\d+\.\s+", "", lines[i])))
+                    items.append(re.sub(r"^\s*\d+\.\s+", "", lines[i]))
                     i += 1
                 for it in items:
                     blocks.append(
@@ -224,7 +231,7 @@ class NotionClientWrapper:
             blocks.append(
                 {
                     "type": "paragraph",
-                    "paragraph": {"rich_text": self._rich_text(self._clean_inline(line))},
+                    "paragraph": {"rich_text": self._rich_text(line)},
                 }
             )
             i += 1
@@ -235,7 +242,7 @@ class NotionClientWrapper:
         return {
             "type": block_type,
             block_type: {
-                "rich_text": self._rich_text(self._clean_inline(text)),
+                "rich_text": self._rich_text(text),
             },
         }
 
@@ -243,29 +250,57 @@ class NotionClientWrapper:
         return {
             "type": "callout",
             "callout": {
-                "rich_text": self._rich_text(self._clean_inline(text)),
+                "rich_text": self._rich_text(text),
                 "icon": {"type": "emoji", "emoji": "💡"},
             },
         }
 
     def _rich_text(self, text: str) -> list[dict]:
-        """Build a list of rich_text objects with bold/italic annotations."""
-        return self._parse_inline(text)
+        """Build a list of rich_text objects with bold/italic annotations.
+
+        Segments longer than 2000 characters (Notion API limit per
+        rich_text segment) are split at word boundaries.
+        """
+        segments = self._parse_inline(text)
+        chunked: list[dict] = []
+        for seg in segments:
+            content = seg["text"]["content"]
+            if len(content) <= 2000:
+                chunked.append(seg)
+                continue
+            start = 0
+            while start < len(content):
+                end = min(start + 2000, len(content))
+                if end < len(content):
+                    space = content.rfind(" ", start, end)
+                    if space > start:
+                        end = space + 1
+                chunk = content[start:end]
+                chunked.append(self._text_segment(
+                    chunk,
+                    bold=seg.get("annotations", {}).get("bold", False),
+                    italic=seg.get("annotations", {}).get("italic", False),
+                ))
+                start = end
+        return chunked or [self._text_segment("")]
 
     def _parse_inline(self, text: str) -> list[dict]:
-        """Parse inline **bold** and *italic* into Notion rich_text segments."""
+        """Parse inline **bold** and *italic* into Notion rich_text segments.
+
+        Only ``**bold**`` and ``*italic*`` are recognized. Underscore-
+        based ``_italic_`` is NOT supported to avoid false positives
+        with underscores in medical/scientific terms (e.g. FeNa_FeUrea).
+        """
         segments: list[dict] = []
-        pattern = re.compile(r"(\*\*([^*]+)\*\*|\*([^*]+)\*|_([^_]+)_)")
+        pattern = re.compile(r"\*\*([^*]+)\*\*|\*([^*]+)\*")
         last = 0
         for m in pattern.finditer(text):
             if m.start() > last:
                 segments.append(self._text_segment(text[last : m.start()]))
-            if m.group(2) is not None:  # **bold**
-                segments.append(self._text_segment(m.group(2), bold=True))
-            elif m.group(3) is not None:  # *italic*
-                segments.append(self._text_segment(m.group(3), italic=True))
-            elif m.group(4) is not None:  # _italic_
-                segments.append(self._text_segment(m.group(4), italic=True))
+            if m.group(1) is not None:  # **bold**
+                segments.append(self._text_segment(m.group(1), bold=True))
+            elif m.group(2) is not None:  # *italic*
+                segments.append(self._text_segment(m.group(2), italic=True))
             last = m.end()
         if last < len(text):
             segments.append(self._text_segment(text[last:]))
@@ -283,12 +318,6 @@ class NotionClientWrapper:
             "text": {"content": content},
             "annotations": annotation,
         }
-
-    @staticmethod
-    def _clean_inline(text: str) -> str:
-        """Strip accidental markdown chars that Notion doesn't render."""
-        text = text.replace("**", "").replace("*", "").replace("_", "")
-        return text.strip()
 
     @staticmethod
     def _parse_table_row(line: str) -> list[str]:

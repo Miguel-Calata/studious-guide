@@ -149,17 +149,21 @@ def test_thinking_param_sent_for_claude_red_sections():
 
     # 🔴 + claude → thinking
     for n in (3, 5, 8, 9):
-        params = _build_extra_params("claude", n)
+        params = _build_extra_params("claude", n, "anthropic/claude-sonnet-5")
         assert "reasoning" in params
         assert params["reasoning"]["enabled"] is True
 
     # 🟢 + claude → sin thinking
     for n in (1, 2, 4, 6, 7, 10, 11):
-        assert _build_extra_params("claude", n) == {}
+        assert _build_extra_params("claude", n, "anthropic/claude-sonnet-5") == {}
 
     # 🔴 + gemini → sin thinking (solo aplica a Claude)
     for n in (3, 5, 8, 9):
-        assert _build_extra_params("gemini", n) == {}
+        assert _build_extra_params("gemini", n, "google/gemini-3.1-pro-preview") == {}
+
+    # Motor claude pero modelo Gemini → sin thinking
+    for n in (3, 5, 8, 9):
+        assert _build_extra_params("claude", n, "google/gemini-3.1-pro-preview") == {}
 
 
 # ── Tarea 5 — par co-generado 4-5 mismo motor ──────────────────────

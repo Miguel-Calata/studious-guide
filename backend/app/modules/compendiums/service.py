@@ -15,13 +15,24 @@ from app.modules.prompts.ecos_service import (
 from app.modules.prompts.section_builder import DOSIFICATION_MAP, SECTION_CONFIGS
 
 MARCADOR_CONTINUACION = re.compile(r"\[CONTINÚA.*?\]", re.IGNORECASE | re.DOTALL)
+FIN_PARTE_MARKER = re.compile(r"\[Fin de la Parte[^\]]*\]", re.IGNORECASE | re.DOTALL)
 HIDE_ALL_ARTIFACT = re.compile(r"strongHIDE\s+ALL|HIDE\s+ALL", re.IGNORECASE)
+
+
+def sanitize_section_content(content: str) -> str:
+    if not content:
+        return content
+    text = MARCADOR_CONTINUACION.sub("", content)
+    text = FIN_PARTE_MARKER.sub("", text)
+    text = HIDE_ALL_ARTIFACT.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 async def merge_extractions(
     db: AsyncSession,
     project: Project,
-) -> Project:
+) -> dict:
     if project.status not in (
         ProjectStatus.DRAFT,
         ProjectStatus.EXTRACTING,
@@ -52,18 +63,30 @@ async def merge_extractions(
             detail="No hay extracciones completadas para fusionar",
         )
 
+    # Collect warnings for failed/pending documents
+    warnings: list[str] = []
+    all_docs_result = await db.execute(
+        select(SourceDocument).where(SourceDocument.project_id == project.id)
+    )
+    all_docs = list(all_docs_result.scalars().all())
+    completed_doc_ids = {ext.source_document_id for ext in extractions}
+    for doc in all_docs:
+        if doc.id not in completed_doc_ids:
+            warnings.append(
+                f"Documento '{doc.filename}' no tiene extracción "
+                f"completada y fue excluido del contenido fusionado."
+            )
+
     parts = []
     for ext in extractions:
-        text = ext.content or ""
-        text = MARCADOR_CONTINUACION.sub("", text)
-        text = HIDE_ALL_ARTIFACT.sub("", text)
+        text = sanitize_section_content(ext.content or "")
         parts.append(text.strip())
 
     merged = "\n\n".join(parts)
     project.merged_content = merged
     await db.commit()
     await db.refresh(project)
-    return project
+    return {"project": project, "warnings": warnings}
 
 
 async def generate_sections(

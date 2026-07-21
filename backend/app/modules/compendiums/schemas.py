@@ -29,6 +29,7 @@ class SectionResponse(BaseModel):
     prompt_version: str | None
     ecos_map_version: str | None
     error_message: str | None
+    is_stale: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -44,6 +45,7 @@ class MergeResponse(BaseModel):
     merged_char_count: int
     extraction_count: int
     project_status: str
+    warnings: list[str] = Field(default_factory=list)
 
 
 class GenerateResponse(BaseModel):

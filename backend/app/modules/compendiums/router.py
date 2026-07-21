@@ -39,11 +39,13 @@ async def merge(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     result = await merge_extractions(db, project)
+    proj = result["project"]
     return {
-        "project_id": str(result.id),
-        "merged_char_count": len(result.merged_content or ""),
-        "extraction_count": result.merged_content.count("\n\n") + 1 if result.merged_content else 0,
-        "project_status": result.status,
+        "project_id": str(proj.id),
+        "merged_char_count": len(proj.merged_content or ""),
+        "extraction_count": proj.merged_content.count("\n\n") + 1 if proj.merged_content else 0,
+        "project_status": proj.status,
+        "warnings": result.get("warnings", []),
     }
 
 

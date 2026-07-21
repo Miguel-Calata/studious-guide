@@ -8,14 +8,16 @@ from sqlalchemy.orm import selectinload
 from app.models.compendium_section import CompendiumSection, SectionStatus
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+from app.modules.compendiums.service import sanitize_section_content
 from app.services.storage import StorageBackend
 
 
 def assemble_markdown(project_name: str, sections: list[CompendiumSection]) -> str:
     parts = [f"# {project_name}\n"]
     for section in sorted(sections, key=lambda s: s.section_number):
+        content = sanitize_section_content(section.content or "")
         parts.append("\n---\n")
-        parts.append(f"\n{section.content.strip()}\n")
+        parts.append(f"\n{content}\n")
     parts.append("\n---\n")
     return "".join(parts)
 

@@ -82,5 +82,10 @@ class CompendiumSection(UUIDMixin, TimestampMixin, Base):
         Text,
         nullable=True,
     )
+    is_stale: Mapped[bool] = mapped_column(
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
 
     project: Mapped["Project"] = relationship(back_populates="sections")

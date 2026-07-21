@@ -1,6 +1,6 @@
-import structlog
 from contextlib import asynccontextmanager
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.models.project import Project, ProjectStatus
 from app.modules.ai_gateway.errors import format_ai_error
 from app.modules.ai_gateway.models import DEFAULT_GENERATION_MODEL
 from app.modules.ai_gateway.openrouter_client import OpenRouterClient
+from app.modules.compendiums.service import sanitize_section_content
 from app.modules.prompts.section_builder import (
     DOSIFICATION_MAP,
     MAX_TOKENS_BY_DOSIFICATION,
@@ -22,7 +23,7 @@ log = structlog.get_logger()
 
 MOTOR_MODEL_MAP = {
     "gemini": DEFAULT_GENERATION_MODEL,
-    "claude": DEFAULT_GENERATION_MODEL,
+    "claude": "anthropic/claude-sonnet-5",
 }
 
 
@@ -140,13 +141,26 @@ async def generate_section(
                 max_tokens=max_tokens,
             )
 
-            section.content = ai_result.content
+            if ai_result.finish_reason == "content_filter":
+                raise ValueError(
+                    f"Sección {section_number} bloqueada por filtro "
+                    f"de contenido del proveedor (content_filter)."
+                )
+
+            cleaned = sanitize_section_content(ai_result.content)
+            if not cleaned:
+                raise ValueError(
+                    f"Sección {section_number} devolvió contenido vacío."
+                )
+
+            section.content = cleaned
             section.model_used = ai_result.model
             section.input_tokens = ai_result.input_tokens
             section.output_tokens = ai_result.output_tokens
             section.cost_usd = ai_result.cost_usd
             section.prompt_version = str(system_prompt_rec.version)
             section.status = SectionStatus.COMPLETED
+            section.is_stale = False
             await db.commit()
 
             log.info(
