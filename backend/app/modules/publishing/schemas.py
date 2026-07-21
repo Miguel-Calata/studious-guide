@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PublishResponse(BaseModel):
@@ -50,6 +50,6 @@ class SourceDocumentPublic(BaseModel):
     filename: str
     document_type: str
     file_size: int
-    uploaded_at: datetime
+    uploaded_at: datetime = Field(validation_alias="created_at")
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}

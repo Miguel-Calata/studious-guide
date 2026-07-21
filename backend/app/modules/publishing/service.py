@@ -65,9 +65,9 @@ async def publish_compendium(
     content_bytes = markdown_content.encode("utf-8")
     key = f"compendiums/{project.slug}.md"
 
-    await storage.save_bytes(key, content_bytes)
+    uri = await storage.save_bytes(key, content_bytes)
 
-    project.s3_key = key
+    project.s3_key = uri
     project.public_url = f"/public/compendiums/{project.slug}/download"
     project.is_published = True
 
@@ -194,7 +194,7 @@ async def download_compendium(
             detail="Compendio no encontrado",
         )
 
-    key = f"local://compendiums/{project.slug}.md"
+    key = project.s3_key or f"local://compendiums/{project.slug}.md"
     content = await storage.read_bytes(key)
     filename = f"{project.slug}.md"
     return filename, content

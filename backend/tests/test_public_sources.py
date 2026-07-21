@@ -1,12 +1,37 @@
 import io
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select, update
 
 from app.models.compendium_section import CompendiumSection, SectionStatus
+from app.models.ecos_map import EcosMap, EcosMapStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+from app.modules.prompts.ecos_service import pathology_key_for
+from app.modules.prompts.ecos_template import ECOS_SECTION_TEMPLATE
+
+
+async def _create_and_approve_ecos_map(db_session, project_name: str, user_id: str):
+    """Create an approved ecos map covering all template slots for the project's pathology."""
+    pathology_key = pathology_key_for(project_name)
+    sections = {}
+    for section_number, slots in ECOS_SECTION_TEMPLATE.items():
+        sections[str(section_number)] = [slot["label"] for slot in slots]
+    eco_map = EcosMap(
+        pathology_key=pathology_key,
+        pathology_name=project_name,
+        version=1,
+        sections=sections,
+        status=EcosMapStatus.APPROVED,
+        origin="seed",
+        is_active=True,
+        approved_by=user_id,
+        approved_at=datetime.now(UTC),
+    )
+    db_session.add(eco_map)
+    await db_session.commit()
 
 
 async def _register_and_login(client, email: str, password: str = "Test1234"):
@@ -92,6 +117,14 @@ async def _complete_extraction(
 
 
 async def _setup_compendium(client, token, project_id, db_session):
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    project = (
+        await db_session.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one()
+    await _create_and_approve_ecos_map(db_session, project.name, user_id)
+
     doc = await _upload_document(client, token, project_id)
     ext = await _create_extraction(client, token, doc["id"])
     await _complete_extraction(db_session, ext, "Clinical content")

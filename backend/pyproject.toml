@@ -19,6 +19,13 @@ dependencies = [
     "redis>=5.2",
     "httpx>=0.28",
     "structlog>=24",
+    "openai>=1.61",
+    "aiobotocore>=2.21",
+    "tenacity>=9.0",
+    "pymupdf4llm>=0.0",
+    "notion-client>=2.2",
+    "aiofiles>=24",
+    "cryptography>=44",
 ]
 
 [project.optional-dependencies]

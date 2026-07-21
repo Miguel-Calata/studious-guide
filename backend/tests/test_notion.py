@@ -1,15 +1,18 @@
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select, update
 
 from app.models.compendium_section import CompendiumSection, SectionStatus
+from app.models.ecos_map import EcosMap, EcosMapStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.notion_config import NotionConfig
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+from app.modules.prompts.ecos_service import pathology_key_for
+from app.modules.prompts.ecos_template import ECOS_SECTION_TEMPLATE
 
 
 def _make_mock_settings(**overrides):
@@ -34,6 +37,27 @@ def _make_mock_settings(**overrides):
         setattr(mock, k, v)
     return mock
 from app.modules.notion.oauth_state import issue_state
+
+
+async def _create_and_approve_ecos_map(db_session, project_name: str, user_id: str):
+    """Create an approved ecos map covering all template slots for the project's pathology."""
+    pathology_key = pathology_key_for(project_name)
+    sections = {}
+    for section_number, slots in ECOS_SECTION_TEMPLATE.items():
+        sections[str(section_number)] = [slot["label"] for slot in slots]
+    eco_map = EcosMap(
+        pathology_key=pathology_key,
+        pathology_name=project_name,
+        version=1,
+        sections=sections,
+        status=EcosMapStatus.APPROVED,
+        origin="seed",
+        is_active=True,
+        approved_by=user_id,
+        approved_at=datetime.now(UTC),
+    )
+    db_session.add(eco_map)
+    await db_session.commit()
 
 
 async def _register_and_login(client, email: str, password: str = "Test1234"):
@@ -122,6 +146,14 @@ async def _complete_extraction(
 
 
 async def _setup_compendium(client, token, project_id, db_session):
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    project = (
+        await db_session.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one()
+    await _create_and_approve_ecos_map(db_session, project.name, user_id)
+
     doc = await _upload_document(client, token, project_id)
     ext = await _create_extraction(client, token, doc)
     await _complete_extraction(db_session, ext, "Clinical content")
@@ -177,12 +209,12 @@ async def _create_notion_config(
     config.owner_email = "dr@test.com"
     config.default_parent_page_id = "parent-page-123"
     config.is_connected = connected
-    config.connected_at = datetime.now(timezone.utc)
-    config.last_refreshed_at = datetime.now(timezone.utc)
+    config.connected_at = datetime.now(UTC)
+    config.last_refreshed_at = datetime.now(UTC)
     if expired:
-        config.token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        config.token_expires_at = datetime.now(UTC) - timedelta(hours=1)
     else:
-        config.token_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+        config.token_expires_at = datetime.now(UTC) + timedelta(days=30)
     db_session.add(config)
     await db_session.commit()
     await db_session.refresh(config)
@@ -750,7 +782,7 @@ class _FakeAPIError(Exception):
 async def test_save_oauth_result_persists_expires_in(client, db_session):
     token = await _register_and_login(client, "notion-expires-in@test.com")
     from app.modules.auth.service import decode_access_token
-    from app.modules.notion.oauth_service import save_oauth_result, NotionTokenResponse
+    from app.modules.notion.oauth_service import NotionTokenResponse, save_oauth_result
 
     user_id = decode_access_token(token)
     from app.models.user import User
@@ -773,14 +805,14 @@ async def test_save_oauth_result_persists_expires_in(client, db_session):
     config = await save_oauth_result(db_session, user, token_data)
 
     assert config.token_expires_at is not None
-    assert config.token_expires_at > datetime.now(timezone.utc)
+    assert config.token_expires_at > datetime.now(UTC)
 
 
 @pytest.mark.asyncio
 async def test_save_oauth_result_no_expires_in_keeps_none(client, db_session):
     token = await _register_and_login(client, "notion-no-expires-in@test.com")
     from app.modules.auth.service import decode_access_token
-    from app.modules.notion.oauth_service import save_oauth_result, NotionTokenResponse
+    from app.modules.notion.oauth_service import NotionTokenResponse, save_oauth_result
 
     user_id = decode_access_token(token)
     from app.models.user import User
@@ -809,7 +841,7 @@ async def test_save_oauth_result_no_expires_in_keeps_none(client, db_session):
 async def test_try_refresh_token_persists_expires_at(client, db_session):
     token = await _register_and_login(client, "notion-refresh-exp@test.com")
     from app.modules.auth.service import decode_access_token
-    from app.modules.notion.oauth_service import try_refresh_token, NotionTokenResponse
+    from app.modules.notion.oauth_service import NotionTokenResponse, try_refresh_token
 
     user_id = decode_access_token(token)
     config = await _create_notion_config(
@@ -840,7 +872,7 @@ async def test_try_refresh_token_persists_expires_at(client, db_session):
     assert result is True
     assert config.access_token == "ntn_refreshed_access_v2"
     assert config.token_expires_at is not None
-    assert config.token_expires_at > datetime.now(timezone.utc)
+    assert config.token_expires_at > datetime.now(UTC)
     assert config.token_expires_at != old_expires
 
 
@@ -848,7 +880,7 @@ async def test_try_refresh_token_persists_expires_at(client, db_session):
 async def test_try_refresh_token_keeps_old_expires_when_no_new(client, db_session):
     token = await _register_and_login(client, "notion-refresh-keep@test.com")
     from app.modules.auth.service import decode_access_token
-    from app.modules.notion.oauth_service import try_refresh_token, NotionTokenResponse
+    from app.modules.notion.oauth_service import NotionTokenResponse, try_refresh_token
 
     user_id = decode_access_token(token)
     config = await _create_notion_config(
@@ -991,7 +1023,7 @@ async def test_ensure_fresh_token_refreshes_when_no_expires_and_stale(client, db
         db_session, user_id, connected=True, with_refresh=True
     )
     config.token_expires_at = None
-    config.last_refreshed_at = datetime.now(timezone.utc) - timedelta(hours=13)
+    config.last_refreshed_at = datetime.now(UTC) - timedelta(hours=13)
     await db_session.commit()
 
     mock_token_data = {
@@ -1068,7 +1100,7 @@ async def test_ensure_fresh_token_skips_refresh_when_fresh(client, db_session):
         db_session, user_id, connected=True, with_refresh=True
     )
     config.token_expires_at = None
-    config.last_refreshed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    config.last_refreshed_at = datetime.now(UTC) - timedelta(hours=1)
     await db_session.commit()
 
     with patch(

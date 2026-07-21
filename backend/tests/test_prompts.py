@@ -23,7 +23,7 @@ async def test_seed_prompts_are_loaded(client):
     )
     assert response.status_code == 200
     prompts = response.json()
-    assert len(prompts) == 6
+    assert len(prompts) == 10
 
     names = {p["name"] for p in prompts}
     expected = {
@@ -33,6 +33,10 @@ async def test_seed_prompts_are_loaded(client):
         "extraction_articles",
         "audit",
         "patch_gemini_density",
+        "ecos_map_autopopulate",
+        "audit_checklist_article",
+        "audit_checklist_bmj",
+        "audit_checklist_guideline",
     }
     assert names == expected
 

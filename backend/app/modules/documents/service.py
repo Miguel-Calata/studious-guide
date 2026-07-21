@@ -50,6 +50,7 @@ async def upload_documents(
     project_id: str,
     files: list[UploadFile],
     document_type: str = "article",
+    storage=None,
 ) -> list[SourceDocument]:
     if not files:
         raise HTTPException(
@@ -63,7 +64,8 @@ async def upload_documents(
             detail=f"Máximo {settings.max_files_per_upload} archivos por subida",
         )
 
-    storage = get_storage_backend()
+    if storage is None:
+        storage = get_storage_backend()
     created: list[SourceDocument] = []
 
     for file in files:
@@ -157,6 +159,7 @@ async def delete_document(
     await db.commit()
 
 
-def resolve_file_path(document: SourceDocument) -> Path:
-    storage = get_storage_backend()
+def resolve_file_path(document: SourceDocument, storage=None) -> Path:
+    if storage is None:
+        storage = get_storage_backend()
     return storage.get_local_path(document.file_path)

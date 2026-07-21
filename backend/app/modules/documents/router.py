@@ -1,15 +1,12 @@
-from pathlib import Path
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies import get_storage
 from app.models.project import Project
 from app.models.source_document import SourceDocument
-from app.models.user import User
-from app.modules.auth.dependencies import get_current_user
 from app.modules.documents.dependencies import (
     get_document_or_404,
     get_project_for_documents,
@@ -38,8 +35,9 @@ async def upload(
     files: list[UploadFile] = [],
     document_type: str = Query(default="article", enum=["bmj", "guideline", "article"]),
     db: AsyncSession = Depends(get_db),
+    storage=Depends(get_storage),
 ) -> dict:
-    docs = await upload_documents(db, project.id, files, document_type)
+    docs = await upload_documents(db, project.id, files, document_type, storage=storage)
     return {"documents": docs}
 
 
@@ -80,13 +78,13 @@ async def delete(
 )
 async def download(
     document: SourceDocument = Depends(get_document_or_404),
+    storage=Depends(get_storage),
 ) -> FileResponse:
-    file_path = resolve_file_path(document)
+    file_path = resolve_file_path(document, storage=storage)
     if not file_path.exists():
-        return FileResponse(
-            path="/dev/null",
-            status_code=404,
-            media_type="application/json",
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Archivo no encontrado en disco",
         )
     return FileResponse(
         path=str(file_path),

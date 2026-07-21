@@ -6,7 +6,7 @@ import type {
 } from '@/types/public'
 
 async function publicFetch<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+  const res = await fetch(path, { credentials: 'include' })
   if (!res.ok) {
     throw new Error(`Error ${res.status}`)
   }

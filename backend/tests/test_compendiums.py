@@ -1,11 +1,37 @@
 import io
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select, update
 
+from app.models.compendium_section import CompendiumSection, SectionStatus
+from app.models.ecos_map import EcosMap, EcosMapStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+from app.modules.prompts.ecos_service import pathology_key_for
+from app.modules.prompts.ecos_template import ECOS_SECTION_TEMPLATE
+
+
+async def _create_and_approve_ecos_map(db_session, project_name: str, user_id: str):
+    """Create an approved ecos map covering all template slots for the project's pathology."""
+    pathology_key = pathology_key_for(project_name)
+    sections = {}
+    for section_number, slots in ECOS_SECTION_TEMPLATE.items():
+        sections[str(section_number)] = [slot["label"] for slot in slots]
+    eco_map = EcosMap(
+        pathology_key=pathology_key,
+        pathology_name=project_name,
+        version=1,
+        sections=sections,
+        status=EcosMapStatus.APPROVED,
+        origin="seed",
+        is_active=True,
+        approved_by=user_id,
+        approved_at=datetime.now(UTC),
+    )
+    db_session.add(eco_map)
+    await db_session.commit()
 
 
 async def _register_and_login(client, email: str, password: str = "Test1234"):
@@ -89,6 +115,17 @@ async def _complete_extraction(db_session, extraction_id: str, content: str = "E
     await db_session.commit()
 
 
+async def _ensure_ecos_map(client, token, project_id, db_session):
+    """Create and approve an ecos map for the project's pathology."""
+    from app.modules.auth.service import decode_access_token
+
+    user_id = decode_access_token(token)
+    project = (
+        await db_session.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one()
+    await _create_and_approve_ecos_map(db_session, project.name, user_id)
+
+
 @pytest.mark.asyncio
 async def test_merge_produces_merged_content(client, db_session):
     token = await _register_and_login(client, "comp-merge@test.com")
@@ -164,6 +201,7 @@ async def test_generate_creates_eleven_sections(client, db_session):
         f"/api/v1/projects/{project_id}/merge",
         headers={"Authorization": f"Bearer {token}"},
     )
+    await _ensure_ecos_map(client, token, project_id, db_session)
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/generate",
@@ -202,6 +240,7 @@ async def test_list_sections_returns_eleven(client, db_session):
         f"/api/v1/projects/{project_id}/merge",
         headers={"Authorization": f"Bearer {token}"},
     )
+    await _ensure_ecos_map(client, token, project_id, db_session)
     await client.post(
         f"/api/v1/projects/{project_id}/generate",
         headers={"Authorization": f"Bearer {token}"},
@@ -230,6 +269,7 @@ async def test_get_specific_section(client, db_session):
         f"/api/v1/projects/{project_id}/merge",
         headers={"Authorization": f"Bearer {token}"},
     )
+    await _ensure_ecos_map(client, token, project_id, db_session)
     await client.post(
         f"/api/v1/projects/{project_id}/generate",
         headers={"Authorization": f"Bearer {token}"},
@@ -261,6 +301,7 @@ async def test_update_section_content(client, db_session):
         f"/api/v1/projects/{project_id}/merge",
         headers={"Authorization": f"Bearer {token}"},
     )
+    await _ensure_ecos_map(client, token, project_id, db_session)
     await client.post(
         f"/api/v1/projects/{project_id}/generate",
         headers={"Authorization": f"Bearer {token}"},
@@ -283,7 +324,6 @@ async def test_update_section_content(client, db_session):
 
 @pytest.mark.asyncio
 async def test_regenerate_resets_status(client, db_session):
-    from app.models.compendium_section import CompendiumSection, SectionStatus
 
     token = await _register_and_login(client, "comp-regen@test.com")
     project_id = await _create_project(client, token)
@@ -295,6 +335,7 @@ async def test_regenerate_resets_status(client, db_session):
         f"/api/v1/projects/{project_id}/merge",
         headers={"Authorization": f"Bearer {token}"},
     )
+    await _ensure_ecos_map(client, token, project_id, db_session)
     await client.post(
         f"/api/v1/projects/{project_id}/generate",
         headers={"Authorization": f"Bearer {token}"},
@@ -341,6 +382,7 @@ async def test_draft_to_generating_is_valid_transition(client, db_session):
     )
     assert project_resp.json()["status"] == ProjectStatus.DRAFT
 
+    await _ensure_ecos_map(client, token, project_id, db_session)
     await client.post(
         f"/api/v1/projects/{project_id}/generate",
         headers={"Authorization": f"Bearer {token}"},
@@ -365,6 +407,7 @@ async def test_cannot_generate_twice(client, db_session):
         f"/api/v1/projects/{project_id}/merge",
         headers={"Authorization": f"Bearer {token}"},
     )
+    await _ensure_ecos_map(client, token, project_id, db_session)
     await client.post(
         f"/api/v1/projects/{project_id}/generate",
         headers={"Authorization": f"Bearer {token}"},
