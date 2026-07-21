@@ -68,6 +68,13 @@ function setup({ status = 'draft', docs = [doc] }: SetupOpts = {}) {
           headers: { 'Content-Type': 'application/json' },
         })
       }
+      // Ecos map endpoints: devolver 404 (sin mapa)
+      if (url.includes('/ecos-map')) {
+        return new Response(
+          JSON.stringify({ detail: 'No existe' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
       return new Response(JSON.stringify(proj), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },

@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { DocumentUploader } from '@/components/documents/DocumentUploader'
 import { DocumentList } from '@/components/documents/DocumentList'
 import { ExtractionCard } from '@/components/pipeline/ExtractionCard'
+import { EcosMapCard } from '@/components/pipeline/EcosMapCard'
 import { CompendiumCard } from '@/components/pipeline/CompendiumCard'
 import { PublishCard } from '@/components/publish/PublishCard'
 import { getDocuments } from '@/api/documents'
@@ -179,6 +180,8 @@ export function ProjectDetailPage() {
         documents={documents ?? []}
         onMutate={refreshAll}
       />
+
+      <EcosMapCard project={project} onMutate={refreshAll} />
 
       <CompendiumCard
         project={project}
