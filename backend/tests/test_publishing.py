@@ -4,9 +4,11 @@ import pytest
 from sqlalchemy import select, update
 
 from app.models.compendium_section import CompendiumSection, SectionStatus
+from app.models.ecos_map import EcosMap, EcosMapStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+from app.modules.prompts.ecos_service import pathology_key_for
 
 
 async def _register_and_login(client, email: str, password: str = "Test1234"):
@@ -94,11 +96,38 @@ async def _complete_extraction(
     await db_session.commit()
 
 
+async def _seed_eco_map_for_project(
+    db_session, project: Project
+) -> None:
+    """Tarea 3: seed un ecos map aprobado para la patología del
+    proyecto. Sin esto, /generate devuelve 409."""
+    db_session.add(
+        EcosMap(
+            id=f"eco-pub-{project.id}",
+            pathology_key=pathology_key_for(project.name),
+            pathology_name=project.name,
+            version=1,
+            sections={},
+            status=EcosMapStatus.APPROVED,
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+
 async def _setup_compendium(client, token, project_id, db_session):
     """Helper: merge + generate + complete all sections."""
     doc = await _upload_document(client, token, project_id)
     ext = await _create_extraction(client, token, doc)
     await _complete_extraction(db_session, ext, "Clinical content")
+
+    # Tarea 3: seed eco map aprobado (sino /generate → 409).
+    project = (
+        await db_session.execute(
+            select(Project).where(Project.id == project_id)
+        )
+    ).scalar_one()
+    await _seed_eco_map_for_project(db_session, project)
 
     await client.post(
         f"/api/v1/projects/{project_id}/merge",
@@ -159,6 +188,13 @@ async def test_publish_without_all_sections_fails(client, db_session):
     doc = await _upload_document(client, token, project_id)
     ext = await _create_extraction(client, token, doc)
     await _complete_extraction(db_session, ext, "Content")
+
+    project = (
+        await db_session.execute(
+            select(Project).where(Project.id == project_id)
+        )
+    ).scalar_one()
+    await _seed_eco_map_for_project(db_session, project)
 
     await client.post(
         f"/api/v1/projects/{project_id}/merge",

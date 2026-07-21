@@ -8,6 +8,10 @@ from app.models.compendium_section import CompendiumSection, SectionStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.project import Project, ProjectStatus
 from app.models.source_document import SourceDocument
+from app.modules.prompts.ecos_service import (
+    get_active_ecos_map,
+    pathology_key_for,
+)
 from app.modules.prompts.section_builder import DOSIFICATION_MAP, SECTION_CONFIGS
 
 MARCADOR_CONTINUACION = re.compile(r"\[CONTINÚA.*?\]", re.IGNORECASE | re.DOTALL)
@@ -83,6 +87,23 @@ async def generate_sections(
             detail="El proyecto no tiene contenido fusionado. Ejecuta el merge primero.",
         )
 
+    # Tarea 3: bloquear 409 si no hay ecos map aprobado para esta
+    # patología. El pipeline NUNCA regenera el mapa en caliente;
+    # el clínico debe aprobar un borrador (vía endpoint dedicado)
+    # antes de poder generar.
+    pathology_key = pathology_key_for(project.name)
+    eco_map = await get_active_ecos_map(db, pathology_key)
+    if eco_map is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"No existe ecos_map aprobado para la patología "
+                f"'{project.name}' (key='{pathology_key}'). Genera un "
+                f"borrador con POST /api/v1/pathologies/{pathology_key}/"
+                f"ecos-map:propose y apruébalo antes de generar."
+            ),
+        )
+
     existing_result = await db.execute(
         select(CompendiumSection).where(CompendiumSection.project_id == project.id)
     )
@@ -113,15 +134,17 @@ async def generate_sections(
     await db.commit()
 
     if arq_pool is not None:
-        for section_number in range(1, 12):
-            job_kwargs: dict = {
-                "project_id": str(project.id),
-                "section_number": section_number,
-                "_job_id": f"generate_{project.id}_{section_number}",
-            }
-            if model_overrides:
-                job_kwargs["model_overrides"] = model_overrides
-            await arq_pool.enqueue_job("generate_section", **job_kwargs)
+        # Tarea 1: el hilo acumulado de conversación obliga a
+        # generación SECUENCIAL 1 → 11. Encolamos un único job
+        # "generate_compendium" que el PipelineOrchestrator ejecuta
+        # en orden. El modelo por sección se resuelve internamente.
+        job_kwargs: dict = {
+            "project_id": str(project.id),
+            "_job_id": f"generate_compendium_{project.id}",
+        }
+        if model_overrides:
+            job_kwargs["motor_model_map"] = model_overrides
+        await arq_pool.enqueue_job("generate_compendium", **job_kwargs)
 
     return {
         "project_id": str(project.id),
@@ -197,13 +220,15 @@ async def regenerate_section(
     await db.refresh(section)
 
     if arq_pool is not None:
+        # Tarea 1 + Tarea 5: regenerar la 4 implica regenerar la 5
+        # (par R-9, mismo motor). El orchestrator gestiona la cascada.
         job_kwargs: dict = {
             "project_id": str(section.project_id),
             "section_number": section.section_number,
-            "_job_id": f"generate_{section.project_id}_{section.section_number}",
+            "_job_id": f"regenerate_{section.project_id}_{section.section_number}",
         }
         if model_overrides:
-            job_kwargs["model_overrides"] = model_overrides
-        await arq_pool.enqueue_job("generate_section", **job_kwargs)
+            job_kwargs["motor_model_map"] = model_overrides
+        await arq_pool.enqueue_job("regenerate_section_job", **job_kwargs)
 
     return section

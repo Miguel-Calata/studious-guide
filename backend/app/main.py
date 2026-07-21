@@ -13,11 +13,12 @@ from app.modules.auth.router import router as auth_router
 from app.modules.compendiums.router import router as compendiums_router
 from app.modules.documents.router import router as documents_router
 from app.modules.extractions.router import router as extractions_router
+from app.modules.notion.router import router as notion_router
 from app.modules.projects.router import router as projects_router
+from app.modules.prompts.ecos_router import router as ecos_router
 from app.modules.prompts.router import router as prompts_router
 from app.modules.publishing.router import public_router as publishing_public_router
 from app.modules.publishing.router import router as publishing_router
-from app.modules.notion.router import router as notion_router
 
 
 @asynccontextmanager
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(documents_router, prefix="/api/v1")
     app.include_router(extractions_router, prefix="/api/v1")
     app.include_router(prompts_router, prefix="/api/v1")
+    app.include_router(ecos_router, prefix="/api/v1")
     app.include_router(compendiums_router, prefix="/api/v1")
     app.include_router(publishing_router, prefix="/api/v1")
     app.include_router(publishing_public_router)

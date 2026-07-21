@@ -27,6 +27,7 @@ class SectionResponse(BaseModel):
     cost_usd: float | None
     status: str
     prompt_version: str | None
+    ecos_map_version: str | None
     error_message: str | None
     created_at: datetime
     updated_at: datetime

@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from app.modules.ai_gateway.conversation import Message
+
 
 @dataclass
 class SectionConfig:
@@ -232,6 +234,9 @@ def _build_ecos_block(ecos: list[str]) -> str:
         f"\n──────────────────────────────────────────────────────────────\n"
         f"MAPA DE ECOS — CONTENIDO YA CUBIERTO (R-1: solo referencia cruzada):\n"
         f"{items}\n"
+        f"Restricción dura: 'mención ≠ desarrollo'. La sección dueña\n"
+        f"SIEMPRE desarrolla su tema completo, aunque otra sección lo\n"
+        f"haya mencionado tangencialmente.\n"
         f"──────────────────────────────────────────────────────────────\n"
     )
 
@@ -260,6 +265,118 @@ def _build_last_section_note(is_last: bool) -> str:
     )
 
 
+def _build_source_block(merged_content: str) -> str:
+    if not merged_content or not merged_content.strip():
+        return ""
+    return (
+        f"\n{'=' * 70}\n"
+        f"CONTENIDO FUENTE (extracciones fusionadas):\n"
+        f"{'=' * 70}\n\n"
+        f"{merged_content.strip()}\n\n"
+        f"{'=' * 70}\n"
+        f"FIN DEL CONTENIDO FUENTE\n"
+        f"{'=' * 70}\n\n"
+    )
+
+
+def build_thread_init_message(
+    system_prompt: str,
+    pathology_name: str,
+    source_filename: str,
+    merged_content: str,
+    patch_gemini: str | None = None,
+) -> Message:
+    """
+    Mensaje inicial del hilo de conversación. Contiene:
+      - (opcional) patch_gemini al inicio si la primera sección usa Gemini
+      - system_prompt SAM v9
+      - bloque de fuentes documentales (merged_content) — se envía
+        UNA sola vez al inicio del hilo
+
+    Las secciones posteriores añaden únicamente su instrucción
+    (build_section_instruction) como turnos user, de modo que la
+    conversación acumula el contexto de secciones previas.
+    """
+    parts: list[str] = []
+    if patch_gemini and patch_gemini.strip():
+        parts.append(patch_gemini.strip())
+    parts.append(system_prompt.strip())
+    header = (
+        f"{'=' * 70}\n"
+        f"INSTRUCCION DE SESION - SAM v9 (inicio de hilo)\n"
+        f"{'=' * 70}\n\n"
+        f"PATOLOGIA : {pathology_name}\n"
+        f"FUENTE(S) : {source_filename}\n"
+    )
+    parts.append(header)
+    body = "\n\n".join(parts)
+    body += _build_source_block(merged_content)
+    body += (
+        "INSTRUCCIÓN DE SESIÓN: Vas a generar las secciones del compendio "
+        "una a una. Recibirás cada nueva sección como turno user "
+        "adicional, con su dosificación, ecos (R-1) y notas. Mantén el "
+        "contexto acumulado de turnos anteriores al redactar cada "
+        "sección. Comienza cuando recibas la primera instrucción.\n"
+    )
+    return Message(role="user", content=body)
+
+
+def build_section_instruction(
+    section_number: int,
+    pathology_name: str,
+    source_filename: str,
+    is_last: bool,
+    ecos: list[str] | None = None,
+    motor_override: str | None = None,
+) -> str:
+    """
+    Instrucción por sección, sin bloque de fuentes (las fuentes ya
+    viven en el primer mensaje del hilo). Pensado para ser anexado
+    como turno user en la misma conversación de generación.
+
+    `ecos` opcional para que la Tarea 3 (MAPA_ECOS híbrido) pueda
+    inyectar el mapa curado por patología; si no se pasa, se usa el
+    genérico del config (compatibilidad tests / flujo AKI legacy).
+    `motor_override` para que Tarea 5 fuerce el motor del par
+    co-generado.
+    """
+    config = SECTION_CONFIGS[section_number]
+    motor = motor_override or config.motor
+    ecos_list = ecos if ecos is not None else config.ecos
+    ecos_block = _build_ecos_block(ecos_list)
+    cogen_note = config.cogeneration_note or ""
+    last_note = _build_last_section_note(is_last)
+    thinking_note = (
+        "  (Extended Thinking / Max Thinking)"
+        if "🔴" in config.dosification_level
+        else ""
+    )
+
+    return (
+        f"{'=' * 70}\n"
+        f"NUEVA SECCIÓN DEL COMPENDIO\n"
+        f"{'=' * 70}\n\n"
+        f"PATOLOGIA : {pathology_name}\n"
+        f"FUENTE(S) : {source_filename}\n"
+        f"MOTOR     : {motor}{thinking_note}\n\n"
+        f"SECCIÓN A DESARROLLAR : {config.section_name}\n"
+        f"SECCIÓN SIGUIENTE     : {config.next_section}\n\n"
+        f"DOSIFICACIÓN DEL RAZONAMIENTO PARA ESTA SECCIÓN:\n"
+        f"  {config.dosification_level} - {config.dosification_desc}\n"
+        f"{ecos_block}"
+        f"{cogen_note}"
+        f"{last_note}\n"
+        f"INSTRUCCIÓN: Desarrolla ÚNICAMENTE la sección "
+        f"\"{config.section_name}\" del compendio, usando exclusivamente "
+        f"el CONTENIDO FUENTE del primer turno de esta conversación. "
+        f"Aplica R-1 (no redefinir temas ya cubiertos en secciones "
+        f"anteriores). No incluyas contenido de otras secciones.\n\n"
+        f"{'=' * 70}\n"
+        f"COMIENZA AHORA: {config.section_name}\n"
+        f"{'=' * 70}\n"
+    )
+
+
 def build_section_prompt(
     section_number: int,
     merged_content: str,
@@ -269,14 +386,22 @@ def build_section_prompt(
     is_last: bool,
     system_prompt: str,
     patch_gemini: str | None = None,
+    ecos: list[str] | None = None,
 ) -> str:
+    """
+    Prompt "standalone" para una sección (modo single-turn, sin hilo).
+    Conserva la firma original para compatibilidad de tests; en el
+    pipeline real el orchestrator usa build_thread_init_message +
+    build_section_instruction sobre una Conversation.
+    """
     config = SECTION_CONFIGS[section_number]
 
     prefix = ""
     if config.motor == "gemini" and patch_gemini:
         prefix = patch_gemini.strip() + "\n\n"
 
-    ecos_block = _build_ecos_block(config.ecos)
+    ecos_list = ecos if ecos is not None else config.ecos
+    ecos_block = _build_ecos_block(ecos_list)
     cogen_note = config.cogeneration_note or ""
     attachment_note = _build_attachment_note(is_first)
     last_note = _build_last_section_note(is_last)
@@ -286,17 +411,7 @@ def build_section_prompt(
         else ""
     )
 
-    source_block = ""
-    if merged_content and merged_content.strip():
-        source_block = (
-            f"\n{'=' * 70}\n"
-            f"CONTENIDO FUENTE (extracciones fusionadas):\n"
-            f"{'=' * 70}\n\n"
-            f"{merged_content.strip()}\n\n"
-            f"{'=' * 70}\n"
-            f"FIN DEL CONTENIDO FUENTE\n"
-            f"{'=' * 70}\n\n"
-        )
+    source_block = _build_source_block(merged_content)
 
     prompt = (
         f"{prefix}"

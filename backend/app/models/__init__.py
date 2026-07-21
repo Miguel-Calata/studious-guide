@@ -6,3 +6,4 @@ from app.models.extraction import Extraction  # noqa: F401
 from app.models.prompt_template import PromptTemplate  # noqa: F401
 from app.models.compendium_section import CompendiumSection  # noqa: F401
 from app.models.notion_config import NotionConfig  # noqa: F401
+from app.models.ecos_map import EcosMap, EcosMapOrigin, EcosMapStatus  # noqa: F401

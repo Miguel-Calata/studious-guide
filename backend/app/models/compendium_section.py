@@ -70,6 +70,10 @@ class CompendiumSection(UUIDMixin, TimestampMixin, Base):
         String(50),
         nullable=True,
     )
+    ecos_map_version: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
     notion_page_id: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,

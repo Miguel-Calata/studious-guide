@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from app.modules.ai_gateway.models import DEFAULT_EXTRACTION_MODEL
+if TYPE_CHECKING:
+    from app.modules.ai_gateway.conversation import Conversation
 
 
 @dataclass
@@ -18,13 +20,35 @@ class AIGatewayClient(ABC):
     @abstractmethod
     async def generate(
         self,
-        prompt: str,
+        prompt: str | None = None,
+        *,
         model: str,
         temperature: float = 0.1,
         max_tokens: int = 65536,
         system_prompt: str | None = None,
+        messages: list[dict] | None = None,
         **kwargs,
     ) -> AIResult: ...
+
+    @abstractmethod
+    async def generate_in_conversation(
+        self,
+        conversation: "Conversation",
+        user_message: str,
+        *,
+        model: str,
+        temperature: float = 0.1,
+        max_tokens: int = 65536,
+        system_prompt: str | None = None,
+        max_continuations: int = 10,
+        **kwargs,
+    ) -> AIResult:
+        """Anexa user_message a la conversación, ejecuta (con
+        continuaciones automáticas si el modelo marca [CONTINÚA] o el
+        output se trunca), acumula las respuestas del asistente de
+        vuelta en la conversación y devuelve el resultado consolidado.
+        """
+        ...
 
     @abstractmethod
     async def generate_with_continuations(
@@ -33,4 +57,11 @@ class AIGatewayClient(ABC):
         model: str | None = None,
         temperature: float = 0.1,
         max_continuations: int = 10,
-    ) -> AIResult: ...
+    ) -> AIResult:
+        """API legacy: prompt único + bucle de continuación.
+        Internamente construye una Conversation, llama a
+        generate_in_conversation y descarta la conversación resultante.
+        Se conserva para extracciones (un solo documento, un solo hilo
+        efímero).
+        """
+        ...

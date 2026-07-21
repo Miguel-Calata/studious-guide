@@ -52,12 +52,85 @@ Se inyecta al inicio de la sesión de Gemini para forzar:
 Construye el prompt final para cada sección combinando:
 ```
 [System Prompt SAM v9]
-[MAPA_ECOS de esta sección]
+[MAPA_ECOS de esta sección (inyectado desde ecos_maps aprobado)]
 [Dosificación de razonamiento]
 [Motor recomendado]
 [Nota de co-generación si aplica]
 [Instrucción específica de sección]
 ```
+
+En el modo hilo (pipeline real), el builder produce DOS artefactos
+distintos por sección, no uno:
+
+- **`build_thread_init_message`** — el PRIMER mensaje del hilo.
+  Contiene el `system_prompt`, las fuentes documentales
+  (`merged_content`) y (opcionalmente) `patch_gemini`. Se envía
+  UNA sola vez al inicio del hilo.
+- **`build_section_instruction`** — cada mensaje user posterior
+  (uno por sección). Contiene la dosificación, los ecos, la nota
+  de co-generación y la instrucción específica. NO re-envía la
+  fuente documental (ya está en el primer mensaje).
+
+El modo standalone (no hilo) sigue disponible vía
+`build_section_prompt` para compatibilidad con tests y casos
+legacy.
+
+### 6. MAPA DE ECOS como entidad versionada (Sprint 12)
+
+A partir del Sprint 12, el `MAPA_ECOS` deja de estar hardcoded
+en `SECTION_CONFIGS` y pasa a vivir en una tabla versionada
+`ecos_maps` con el siguiente esquema:
+
+```
+ecos_maps:
+  id (uuid)
+  pathology_key (slug normalizado)
+  pathology_name (humano)
+  version (int)
+  sections (JSONB)  → { "<n>": ["eco1", ...], ... }
+  status (draft | approved)
+  origin (seed | autopopulated | manual)
+  is_active (bool)
+  approved_by, approved_at
+  description
+```
+
+Las versiones siguen el mismo patrón que `prompt_templates`: una
+nueva versión desactiva la anterior; la activa es la única que el
+pipeline consume. La trazabilidad se registra en
+`compendium_sections.ecos_map_version` por sección generada.
+
+**Flujo humano:**
+1. `POST /api/v1/pathologies/{key}/ecos-map:propose` —
+   genera un borrador (status=draft, origin=autopopulated)
+   usando el mini-prompt `ecos_map_autopopulate` sembrado en
+   `prompt_templates` con `type='ecos_map'`. El borrador está
+   basado en `ECOS_SECTION_TEMPLATE` (slots agnósticos de
+   patología, `app/modules/prompts/ecos_template.py`).
+2. Revisión humana del draft.
+3. `POST /api/v1/ecos-maps/{id}/approve` — marca
+   status=approved, is_active=true, desactiva la versión
+   anterior de la misma patología. Registra `approved_by` y
+   `approved_at`.
+
+**Restricción dura:** el pipeline NUNCA regenera un mapa en
+caliente. Si no existe mapa aprobado activo para la patología
+del proyecto al intentar generar, el endpoint devuelve
+`HTTP 409 Conflict` con mensaje accionable que apunta al
+endpoint de propuesta. La generación queda bloqueada.
+
+**Validación de cobertura:** `validate_ecos_map(draft)` garantiza
+que cada slot del `ECOS_SECTION_TEMPLATE` aparezca en los ecos
+de su sección dueña. La plantilla define la propiedad única:
+cada slot tiene exactamente una sección dueña. La cláusula
+"mención ≠ desarrollo" se inyecta en el bloque de ecos de cada
+sección: la sección dueña SIEMPRE desarrolla su tema completo,
+aunque otra lo haya mencionado tangencialmente.
+
+**Seed AKI:** la migración 011 siembra el mapa AKI v1 copiando
+byte a byte el contenido de `SECTION_CONFIGS[*].ecos` original.
+Cualquier patología nueva requiere un borrador aprobado antes
+de poder generar.
 
 ---
 

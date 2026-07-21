@@ -1,13 +1,11 @@
-import structlog
 from contextlib import asynccontextmanager
-from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import pymupdf4llm
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.database import async_session
 from app.models.extraction import Extraction, ExtractionStatus
 from app.models.project import Project, ProjectStatus
@@ -15,6 +13,7 @@ from app.models.source_document import SourceDocument, SourceDocumentStatus
 from app.modules.ai_gateway.errors import format_ai_error
 from app.modules.ai_gateway.models import DEFAULT_EXTRACTION_MODEL
 from app.modules.ai_gateway.openrouter_client import OpenRouterClient
+from app.modules.audit.service import run_audit_for_extraction
 from app.modules.prompts.service import get_active_prompt
 from app.services.storage import get_storage_backend
 
@@ -110,9 +109,6 @@ async def extract_document(
                 document.document_type, "extraction_articles"
             )
             extraction_prompt = await get_active_prompt(db, prompt_name)
-            system_prompt = await get_active_prompt(
-                db, "system_prompt_sam_v9"
-            )
 
             full_prompt = (
                 f"{extraction_prompt.content}\n\n"
@@ -179,5 +175,69 @@ async def extract_document(
             return {"status": "failed", "error": format_ai_error(exc)}
 
 
-async def audit_extraction(ctx: dict, extraction_id: str) -> dict:
-    return {"status": "ok", "message": "audit placeholder"}
+async def audit_extraction(
+    ctx: dict,
+    extraction_id: str,
+    _db: AsyncSession | None = None,
+) -> dict:
+    """
+    Tarea 2: auditoría v1 contra checklist curado en prompt_templates.
+    Compara el contenido de la extracción contra los hechos esperados
+    del tipo de documento y persiste el reporte (con la lista de
+    faltantes) en `extraction.audit_content`.
+
+    Nunca falla la extracción: si el checklist no está disponible
+    o la extracción no existe, se loguea y se retorna error suave.
+    """
+    async with _get_session(_db) as db:
+        result = await db.execute(
+            select(Extraction).where(Extraction.id == extraction_id)
+        )
+        extraction = result.scalar_one_or_none()
+        if extraction is None:
+            log.warning("audit_extraction.not_found", extraction_id=extraction_id)
+            return {"status": "skipped", "reason": "extraction_not_found"}
+
+        doc_result = await db.execute(
+            select(SourceDocument).where(
+                SourceDocument.id == extraction.source_document_id
+            )
+        )
+        document = doc_result.scalar_one_or_none()
+        if document is None:
+            log.warning(
+                "audit_extraction.document_not_found",
+                extraction_id=extraction_id,
+            )
+            return {"status": "skipped", "reason": "document_not_found"}
+
+        try:
+            report = await run_audit_for_extraction(db, extraction, document)
+            log.info(
+                "audit_extraction_completed",
+                extraction_id=str(extraction.id),
+                document_id=str(document.id),
+                checklist=report.checklist_name,
+                missing_count=report.missing_count,
+                present_count=report.present_count,
+                total_facts=report.total_facts,
+            )
+            if report.missing_count > 0:
+                log.warning(
+                    "audit_extraction_missing_facts",
+                    extraction_id=str(extraction.id),
+                    missing_ids=[f.id for f in report.missing],
+                )
+            return {
+                "status": "completed",
+                "missing_count": report.missing_count,
+                "present_count": report.present_count,
+                "total_facts": report.total_facts,
+            }
+        except Exception as exc:
+            log.error(
+                "audit_extraction_failed",
+                extraction_id=extraction_id,
+                error=str(exc),
+            )
+            return {"status": "failed", "error": format_ai_error(exc)}

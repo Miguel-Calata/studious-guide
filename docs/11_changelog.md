@@ -4,6 +4,116 @@ Registro cronológico de decisiones arquitectónicas, cambios de diseño y desvi
 
 ---
 
+## 2026-07-21 — Sprint 12: Cierre de brechas auditoría clínica AKI + auditoría técnica interna
+
+### Alcance
+Atender los hallazgos de la auditoría clínica externa (pérdida de
+contenido entre versiones, "no hay datos suficientes" espurios,
+omisión de protocolos en poblaciones especiales) y de la auditoría
+técnica interna (extended thinking, audit de extracción y
+continuidad de contexto documentados pero no implementados), en el
+orden de dependencias acordado.
+
+### Decisiones
+
+| # | Decisión | Justificación | Alternativas |
+|---|----------|---------------|-------------|
+| F-21 | **Hilo de conversación completo 1→11 (Tarea 1)** | Réplica fiel del flujo manual del Dr. (un chat por motor con todas las secciones en orden cronológico). La conversación es DERIVADA del estado de la BD (no requiere tabla de estado mutable) → sobrevive a workers separados y retries | Hilo solo para el par co-generado 4-5 (rechazado: la auditoría clínica pidió fidelidad total al flujo manual). Estado mutable compartido (rechazado: complica retries) |
+| F-22 | **Orquestador secuencial 1→11 vía `PipelineOrchestrator`** | El hilo acumulado obliga a orden (las secciones previas se inyectan en la conversación de la siguiente) y al cascade R-9 (regenerar 4 implica regenerar 5) | Paralelo (rechazado: rompe el orden del hilo). Estado de conversación en BD (descartado: complicación sin ganancia) |
+| F-23 | **Extended thinking vía `reasoning: {enabled: True, max_tokens: 16000}`** | El formato REAL de OpenRouter (no `thinking` como decía docs/09 — corregido). Habilitado solo para Claude en secciones 🔴 | `thinking` (formato incorrecto). Reasoning con `effort` (rechazado: budget explícito da control de costo) |
+| F-24 | **Detección de truncamiento con fail-loud (`ContinuationExhaustedError`)** | Si el modelo se trunca tras agotar continuaciones, NUNCA guardar contenido truncado como COMPLETED. Explicación: el "pérdida de contenido entre versiones" detectado en la auditoría clínica era silencioso | Silenciar y guardar igual (rechazado: causa directa del bug detectado) |
+| F-25 | **Auditoría v1 con checklist curado en `prompt_templates`** (Tarea 2) | Versionable igual que el resto de prompts, editable sin deploy, consistente con la filosofía del repo. Matching por keyword normalizada (sin acentos, minúsculas) — v1 documentado como limitación | LLM self-audit legacy (rechazado: caro, no reproducible). Constante Python (descartado: cambios requieren deploy) |
+| F-26 | **Mapa de ecos híbrido: tabla `ecos_maps` versionada + aprobación humana** (Tarea 3) | Réplica del patrón `prompt_templates` (version + is_active). El clínico aprueba el mapa antes de poder generar. La "omisión de protocolos completos en poblaciones especiales" se mitiga garantizando cobertura del template por sección | Regenerar en caliente (rechazado: explícitamente prohibido por la spec). Plantilla genérica cruda sin aprobación (rechazado: ecosistema de ecos no curado) |
+| F-27 | **Bloqueo 409 sin eco map aprobado** (Tarea 3) | Cumple estrictamente "aprobación humana explícita antes de usarse en generación real". El error incluye el endpoint `POST /pathologies/{key}/ecos-map:propose` como siguiente acción | Usar plantilla genérica sin poblar (rechazado: ecos no curados) |
+| F-28 | **Harness de comparación acepta CUALQUIER modelo de AVAILABLE_MODELS** (Tarea 4) | La decisión de producto sobre la bifurcación original Gemini/Claude debe poder evaluar el catálogo completo (no solo los 2 Claudes que eran la pregunta original). Validación contra el catálogo en runtime | Hardcodear subset (rechazado: limita evidencia) |
+| F-29 | **Par co-generado 4-5 hereda motor del ancla (Tarea 5)** | Cumplir R-9 sin rutas cross-motor. Implementado en `_resolve_motor_for_section(5, prior_pair_motor=<4's motor>)`; la cascada en regeneración garantiza que 4+5 siempre van juntos | Bifurcar (rechazado: explícitamente prohibido) |
+
+### Migraciones nuevas
+
+- `010_seed_audit_checklists.py` — 3 checklists curados (BMJ/NICE CKS, guías KDIGO/NICE/Renal Association, artículos de revista) con hechos versionables.
+- `011_ecos_maps.py` — tabla `ecos_maps` + columna `ecos_map_version` en `compendium_sections` + seed AKI v1 byte-idéntico al config legacy + mini-prompt `ecos_map_autopopulate` (type=`ecos_map`).
+
+### Archivos nuevos
+
+**Backend (módulos):**
+- `app/modules/ai_gateway/conversation.py` — `Conversation` derivable, guardia de overflow (`ContextOverflowError`), heurística chars/4.
+- `app/modules/ai_gateway/context_windows.py` — ventanas por familia de modelo para el guard de overflow.
+- `app/modules/audit/service.py` — `find_missing_facts`, `parse_checklist`, `run_audit_for_extraction`.
+- `app/modules/prompts/ecos_service.py` — `pathology_key_for`, `get_active_ecos_map`, `validate_ecos_map`, `propose_ecos_map`, `approve_ecos_map`, `require_approved_map`.
+- `app/modules/prompts/ecos_template.py` — `ECOS_SECTION_TEMPLATE` (slots por sección agnósticos de patología).
+- `app/modules/prompts/ecos_router.py` — endpoints REST para gestión de ecos maps.
+- `app/models/ecos_map.py` — modelo `EcosMap` con `status`, `origin`, `is_active`, `version`.
+- `app/workers/compendium_jobs.py` — `generate_compendium`, `regenerate_section_job` (jobs ARQ).
+
+**Backend (scripts y docs):**
+- `backend/scripts/compare_motors.py` — harness CLI de Tarea 4.
+- `docs/13_comparacion_motores.md` — protocolo de la comparación empírica.
+
+**Tests (8 archivos nuevos + 2 reescritos):**
+- `tests/test_conversation.py` (21 tests): Conversation, continuaciones reales, overflow, thinking.
+- `tests/test_audit.py` (16 tests): normalize, find_missing_facts, parse_checklist, flujo worker.
+- `tests/test_ecos_map.py` (12 tests): pathology_key, validate, propose, approve, integración.
+- `tests/test_cogeneration.py` (8 tests): par 4-5 hereda motor del ancla (Tarea 5).
+- `tests/test_compare_motors.py` (7 tests): validación de modelos, inferencia de motor, CLI.
+- Reescritos: `test_section_builder.py`, `test_generation_worker.py` contra la spec.
+- Extendidos: `test_ai_gateway.py` (continuaciones reales + truncamiento fail-loud).
+- `test_publishing.py` actualizado con seed de eco map.
+
+### Archivos modificados
+
+- `app/modules/ai_gateway/openrouter_client.py` — `generate(messages=...)`, `generate_in_conversation`, continuaciones con historial real, `ContinuationExhaustedError`, truncamiento fail-loud.
+- `app/modules/ai_gateway/interfaces.py` — firmas actualizadas.
+- `app/modules/ai_gateway/models.py` — `AVAILABLE_MODELS` (sin tocar — invariante).
+- `app/modules/prompts/section_builder.py` — `build_thread_init_message` y `build_section_instruction` (modo hilo), `build_section_prompt` (modo legacy retrocompatible), cláusula "mención ≠ desarrollo".
+- `app/services/orchestrator.py` — `PipelineOrchestrator` real (antes stub): `generate_all_sections` secuencial 1→11, `regenerate_single_section` con cascada R-9, `COGENERATION_PAIRS`, `_build_extra_params` con `reasoning`.
+- `app/modules/compendiums/service.py` — `generate_sections` encola UN job `generate_compendium` (antes 11 paralelos); bloqueo 409 sin eco map.
+- `app/modules/compendiums/schemas.py` — `SectionResponse.ecos_map_version`.
+- `app/workers/__init__.py` — registra los nuevos jobs.
+- `app/workers/extraction_worker.py` — `audit_extraction` real (antes placeholder).
+- `app/main.py` — registra `ecos_router`.
+- `app/models/compendium_section.py` — columna `ecos_map_version`.
+- `app/models/__init__.py` — importa `EcosMap`.
+
+### Bugs corregidos (raíz de la auditoría clínica)
+
+1. **`generate_with_continuations` enviaba solo "Continúa"** sin historial → todas las continuaciones eran amnésicas. Causa directa de "pérdida de contenido entre versiones" y de la nota R-9 de la sección 5 mintiendo sobre el contexto previo.
+2. **`finish_reason="length"` silenciado** como COMPLETED → contenido truncado persistido. Causa de pérdidas de secciones largas.
+3. **`audit_extraction` placeholder** → sin verificación post-extracción → omisiones flagrantantes pasaban al compendio.
+4. **MAPA_ECOS hardcoded AKI** → cualquier patología nueva generaba compendios sin protección anti-redundancia. Causa de omisión de protocolos.
+5. **MOTOR_MODEL_MAP bifurcación muerta** → ambos motores en Gemini → "no hay datos suficientes" porque Gemini 2.5 sin thinking no cubre razonamiento clínico profundo. Resuelto por Tarea 1 (thinking real) + Tarea 4 (decisión empírica pendiente).
+
+### Decisión de producto PENDIENTE (Tarea 4)
+
+La bifurcación original Gemini/Claude se cuestiona con el catálogo
+actual. El harness `scripts/compare_motors.py` está listo para
+ejecutar la comparación con cualquier subconjunto de
+AVAILABLE_MODELS; el reporte debe completarse con la rúbrica
+humana de `docs/13_comparacion_motores.md`. Hasta que se ejecute y
+decida, `MOTOR_MODEL_MAP` queda con ambos motores apuntando al
+default (`google/gemini-3.1-pro-preview`); con el extended
+thinking real implementado en Tarea 1, los tests de Tarea 6
+verifican el mecanismo de override con un mapa inyectado.
+
+### Verificación
+
+- 111 tests passing en el scope de las 6 tareas (de un total
+  de 191 en la suite; 32 fallas restantes son pre-existentes
+  en `test_notion` y `test_public_sources`, fuera de scope).
+- `ruff check` limpio en todos los archivos nuevos y modificados.
+- Migraciones 010 y 011 aplicadas en el contenedor; seeds
+  verificados (`audit_checklist_*` x3, `ecos_map_autopopulate`
+  prompt, mapa AKI v1 aprobado y activo).
+
+### Notas
+
+- `memory/scripts/sam_v9_generador.py` (script del flujo manual
+  legacy) queda intacto. Es un artefacto histórico; el pipeline
+  real corre en el orquestador.
+- `AVAILABLE_MODELS` intacto. El harness de Tarea 4 valida
+  contra el catálogo en runtime, no lo modifica.
+
+---
+
 ## 2026-07-08 — Sprint 11: Public viewer + publish (frontend)
 
 ### Alcance

@@ -73,6 +73,13 @@ Automatizar completamente las Fases 1-5 del flujo manual del Dr., reemplazando e
 
 ## 🔌 OpenRouter Client (AI Gateway Unificado)
 
+> **Actualizado Sprint 12.** El cliente ahora soporta mensajes
+> explícitos (`generate(messages=...)`), continuaciones con
+> historial real (`generate_in_conversation`), y guardia de
+> overflow con `ContextOverflowError`. El catálogo de modelos
+> vive en `app/modules/ai_gateway/models.py:AVAILABLE_MODELS`
+> (intacto, validado contra el spec).
+
 ```python
 # backend/app/modules/ai_gateway/openrouter_client.py
 
@@ -93,16 +100,14 @@ class OpenRouterClient:
     Cliente unificado para OpenRouter API.
     Compatible con OpenAI SDK → mismo código para cualquier modelo.
     """
-    
-    # Modelos disponibles (IDs de OpenRouter)
-    MODELS = {
-        "gemini": "google/gemini-2.5-pro",
-        "claude": "anthropic/claude-3.5-sonnet",
-        # Alternativas de respaldo:
-        # "gemini-flash": "google/gemini-2.5-flash",
-        # "claude-haiku": "anthropic/claude-3.5-haiku",
-    }
-    
+
+    # Modelos disponibles — Sprint 12: el catálogo está en
+    # AVAILABLE_MODELS (NO hardcoded). Se valida contra la lista
+    # en runtime (harness de Tarea 4).
+    # Última actualización conocida: 16 modelos incluyendo
+    # Claude Opus 4.8, Claude Sonnet 5, Gemini 3.1 Pro, Gemini 3.5
+    # Flash, GPT-5 Pro, Qwen3.6 Flash, etc.
+
     def __init__(self, api_key: str, base_url: str = "https://openrouter.ai/api/v1"):
         self.client = AsyncOpenAI(
             api_key=api_key,
@@ -112,45 +117,51 @@ class OpenRouterClient:
                 "X-Title": "SAM Platform",
             }
         )
-    
+
     async def generate(
         self,
-        prompt: str,
+        prompt: str | None = None,
+        *,
         model: str,
         temperature: float = 0.1,
         max_tokens: int = 65536,
         system_prompt: str | None = None,
-        **kwargs
+        messages: list[dict] | None = None,
+        **kwargs,
     ) -> AIResult:
         """
         Llamada unificada a cualquier modelo vía OpenRouter.
-        
-        Args:
-            model: ID del modelo (ej. "google/gemini-2.5-pro")
-            prompt: Prompt del usuario
-            system_prompt: System prompt opcional
-            temperature: 0.1 para extracción/generación clínica
-            max_tokens: Límite de output
+
+        - Si se pasa `messages`, se usan directamente (recomendado
+          para Conversation: historial completo de la sesión).
+        - Si se pasa `prompt`, se construye un único turno user.
+        - `**kwargs` se envían como `extra_body` (ej.
+          `reasoning`, etc.).
         """
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
+        if messages is None:
+            messages = []
+            if system_prompt:
+                messages.append(
+                    {"role": "system", "content": system_prompt}
+                )
+            if prompt is None:
+                raise ValueError(
+                    "generate requiere 'messages' o 'prompt'"
+                )
+            messages.append({"role": "user", "content": prompt})
+
         response = await self.client.chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body=kwargs,  # Parámetros extra (ej. extended thinking para Claude)
+            extra_body=kwargs,
         )
-        
+
         choice = response.choices[0]
         usage = response.usage
-        
-        # OpenRouter devuelve el costo total en la response
         cost_usd = response.cost if hasattr(response, 'cost') else 0.0
-        
+
         return AIResult(
             content=choice.message.content or "",
             model=response.model,
@@ -169,33 +180,33 @@ class OpenRouterClient:
     ) -> AIResult:
         """
         Genera contenido manejando continuaciones automáticas.
-        Si el modelo responde [CONTINÚA...], pide continuación.
+
+        Sprint 12 (Tarea 1): la implementación REAL acumula el
+        historial de mensajes. La implementación original (v8)
+        enviaba solo "Continúa" sin contexto, perdiendo toda la
+        fuente documental en cada continuación.
         """
-        result = await self.generate(prompt, model, temperature)
-        full_content = result.content
-        total_tokens = result.input_tokens + result.output_tokens
-        total_cost = result.cost_usd
-        continuation_count = 0
-        
-        while ("[CONTINÚA" in full_content or "[Fin de la Parte" in full_content) \
-              and continuation_count < max_continuations:
-            cont_result = await self.generate(
-                "Continúa", model, temperature
-            )
-            full_content += "\n\n" + cont_result.content
-            total_tokens += cont_result.input_tokens + cont_result.output_tokens
-            total_cost += cont_result.cost_usd
-            continuation_count += 1
-        
-        return AIResult(
-            content=full_content,
-            model=result.model,
-            input_tokens=total_tokens,
-            output_tokens=total_tokens,  # Simplificado
-            cost_usd=total_cost,
-            finish_reason="STOP",
+        conv = Conversation()
+        conv.add_user(prompt)
+        return await self.generate_in_conversation(
+            conversation=conv,
+            user_message="",
+            model=model,
+            temperature=temperature,
+            max_continuations=max_continuations,
         )
 ```
+
+> **Sprint 12 — `generate_in_conversation` (nuevo):** acumula
+> los mensajes assistant en una `Conversation` y reenvía el
+> historial COMPLETO en cada llamada de continuación. Antes de
+> la primera llamada, valida que la conversación acumulada +
+> output reservado quepan en la ventana del modelo
+> (`ContextOverflowError` si se supera — NUNCA trunca en
+> silencio). Tras agotar `max_continuations`, si la respuesta
+> sigue truncada (`finish_reason='length'`), lanza
+> `ContinuationExhaustedError` y se rehúsa devolver contenido
+> truncado.
 
 ---
 
@@ -213,64 +224,78 @@ cost = response.cost  # Ya calculado por OpenRouter
 
 ### Estimación por patología (con OpenRouter)
 
-| Fase | Modelo | Input (est.) | Output (est.) | Costo OpenRouter (est.) |
+> ⚠️ **Pendiente Sprint 12 Tarea 4.** Las estimaciones de costo
+> y la decisión de bifurcación entre Gemini 3.1 Pro / Claude
+> Sonnet 5 / Claude Opus 4.8 requieren una comparación empírica
+> contra el catálogo actual de `AVAILABLE_MODELS`. Mientras
+> tanto, el `MOTOR_MODEL_MAP` por defecto mapea ambos motores
+> (gemini, claude) a `google/gemini-3.1-pro-preview`. Ver
+> `docs/13_comparacion_motores.md` para el harness
+> (`backend/scripts/compare_motors.py`) y la rúbrica de
+> decisión.
+
+| Fase | Modelo (default) | Input (est.) | Output (est.) | Costo OpenRouter (est.) |
 |------|--------|-------------|---------------|------------------------|
-| Extracción ×3 PDFs | Gemini 2.5 Pro | ~450k | ~250k | ~$2.50-3.50 |
-| Auditoría ×3 | Gemini 2.5 Pro | ~200k | ~50k | ~$0.50-1.00 |
-| Secciones 🟢🟡 ×7 | Gemini 2.5 Pro | ~1M | ~56k | ~$2.00-3.00 |
-| Secciones 🔴 ×4 | Claude 3.5 Sonnet | ~600k | ~32k | ~$2.00-3.00 |
+| Extracción ×3 PDFs | Gemini 3.1 Pro | ~450k | ~250k | ~$2.50-3.50 |
+| Auditoría ×3 | keyword match v1 | — | — | ~$0 (local, sin API) |
+| Secciones 🟢🟡 ×7 | Gemini 3.1 Pro | ~1M | ~56k | ~$2.00-3.00 |
+| Secciones 🔴 ×4 | Gemini 3.1 Pro* | ~600k | ~32k | ~$2.00-3.00 |
 | **TOTAL** | | | | **~$7-10 USD** |
 
-> ⚠️ Precios de OpenRouter varían. Verificar en [openrouter.ai/models](https://openrouter.ai/models) al implementar.
+\* Cuando se decida la bifurcación post-Tarea 4, las secciones
+🔴 usarán un Claude con `reasoning: {enabled: True}` y el costo
+puede subir ~$1-3 USD adicionales.
 
 ---
 
 ## 🔄 Orquestador del Pipeline
+
+> **Actualizado Sprint 12.** El `PipelineOrchestrator` pasó de
+> stub (`pass`) a implementación real, con generación SECUENCIAL
+> 1 → 11 sobre un único hilo de conversación (Tarea 1), cascada
+> R-9 (Tarea 5) y verificación de eco map aprobado (Tarea 3).
 
 ```python
 # backend/app/services/orchestrator.py
 
 class PipelineOrchestrator:
     """
-    Coordina el pipeline completo usando OpenRouter.
+    Coordina la generación de un compendio completo manteniendo
+    continuidad real de contexto entre secciones (hilo acumulado
+    derivado del estado de la BD), con motor resuelto por
+    sección, soporte de co-generación 4-5 y verificación de mapa
+    de ecos aprobado.
     """
-    
-    def __init__(
+
+    COGENERATION_PAIRS = {5: 4}  # R-9
+
+    async def generate_all_sections(
         self,
-        openrouter: OpenRouterClient,
-        prompt_engine: PromptEngine,
-        db_session: AsyncSession,
-        redis_queue: ArqQueue,
-    ):
-        self.ai = openrouter
-        self.prompts = prompt_engine
-        self.db = db_session
-        self.queue = redis_queue
-    
-    async def extract_all(self, project_id: UUID) -> None:
-        """Fase 1: Extraer todos los PDFs (Gemini vía OpenRouter)."""
-        documents = await self._get_pending_documents(project_id)
-        for doc in documents:
-            await self.queue.enqueue_job(
-                'extract_document',
-                document_id=str(doc.id),
-                _job_id=f"extract_{doc.id}"
-            )
-    
-    async def generate_all_sections(self, project_id: UUID) -> None:
-        """Fase 3: Generar las 11 secciones con el modelo óptimo."""
-        for section_number in SECTION_CONFIGS.keys():
-            config = SECTION_CONFIGS[section_number]
-            model_id = OpenRouterClient.MODELS[config.motor]  # "google/gemini-2.5-pro" o "anthropic/claude-3.5-sonnet"
-            
-            await self.queue.enqueue_job(
-                'generate_section',
-                project_id=str(project_id),
-                section_number=section_number,
-                model_id=model_id,
-                _job_id=f"gen_{project_id}_{section_number}"
-            )
+        project_id: str,
+        motor_model_map: dict[str, str] | None = None,
+        eco_map_lookup=None,
+        eco_map=None,
+    ) -> OrchestratorResult:
+        # 1. Cargar eco map aprobado (bloquear 409 si no existe)
+        # 2. Para cada sección 1..11:
+        #    a. Resolver motor con regla R-9 (5 hereda de 4)
+        #    b. Construir hilo (replay de secciones previas)
+        #    c. Generar con extended thinking si Claude + 🔴
+        #    d. Persistir sección + prompt_version + ecos_map_version
+        # 3. Transición DRAFT/REVIEW → GENERATING → REVIEW
 ```
+
+**Job ARQ único**: `generate_compendium` (sustituye los 11 jobs
+paralelos `generate_section` del Sprint 8). El orquestador
+corre las 11 secciones en orden, manteniendo la conversación en
+memoria durante el job. La conversación se reconstruye por
+sección desde el estado de la BD sin llamadas extra a la API
+(las respuestas assistant se recuperan de
+`CompendiumSection.content`).
+
+**Regeneración**: `regenerate_section_job` regenera una sección
+individual. Si es la 4 o 5 del par R-9, ambas se regeneran con
+el mismo motor (cascada).
 
 ---
 
@@ -296,8 +321,11 @@ async def generate_section(ctx, project_id: str, section_number: int, model_id: 
         # 2. Parámetros extra según modelo
         extra_params = {}
         if "claude" in model_id and "🔴" in config.dosification_level:
-            # Extended thinking para Claude en secciones críticas
-            extra_params["thinking"] = {"type": "enabled", "budget_tokens": 16000}
+            # Extended thinking para Claude en secciones críticas.
+            # Formato REAL de OpenRouter (Sprint 12, Tarea 1):
+            # `reasoning: {enabled: True, max_tokens: N}`.
+            # La doc original mencionaba `thinking` (incorrecto).
+            extra_params["reasoning"] = {"enabled": True, "max_tokens": 16000}
         
         # 3. Llamada unificada vía OpenRouter
         result = await openrouter_client.generate(
@@ -349,10 +377,12 @@ OpenRouter pricing es transparente y se actualiza en tiempo real. Cada llamada d
 
 ### Estrategia para minimizar costos
 
-1. **Modelo correcto para cada sección**: Gemini para secciones descriptivas (más barato), Claude solo para las 4 secciones 🔴 que requieren razonamiento profundo
-2. **Reutilizar el compendio generado**: Una vez publicado en S3 + Notion, no se re-genera a menos que cambien las fuentes
-3. **Previsualización sin costo**: El visor público carga el .md desde S3 → cero costo de API
-4. **Futuro**: Explorar modelos más baratos en OpenRouter para secciones 🟢 (ej. Gemini Flash, Claude Haiku)
+1. **Modelo correcto para cada sección**: Gemini para secciones descriptivas (más barato), Claude solo para las 4 secciones 🔴 que requieren razonamiento profundo. La decisión final (qué modelo exacto para cada par) la decide Tarea 4 con evidencia empírica.
+2. **Hilo acumulado compartido** (Sprint 12, Tarea 1): cada sección reusa las respuestas de las anteriores sin pagar de más. Tradeoff: las primeras secciones son más caras porque el prompt crece; mitigable con OpenRouter prompt caching.
+3. **Auditoría v1 sin API** (Sprint 12, Tarea 2): matching de keywords contra checklist curado. Cero tokens para esta fase.
+4. **Reutilizar el compendio generado**: Una vez publicado en S3 + Notion, no se re-genera a menos que cambien las fuentes
+5. **Previsualización sin costo**: El visor público carga el .md desde S3 → cero costo de API
+6. **Futuro**: Explorar modelos más baratos en OpenRouter para secciones 🟢 (ej. Gemini Flash, Claude Haiku) — la decisión de bifurcación post-Tarea 4 puede considerar estos.
 
 ---
 
