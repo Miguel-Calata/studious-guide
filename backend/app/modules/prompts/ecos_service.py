@@ -23,17 +23,22 @@ Funciones:
     pipeline; lanza EcoMapNotApprovedError si no hay mapa
     aprobado.
 
-Restricción dura implementada en `validate_ecos_map`: ningún slot
-del template puede quedar sin dueño. Si un slot no aparece, se
-rechaza el borrador. La inversa ("mención ≠ desarrollo") se
-garantiza en el bloque de ecos del prompt (R-1 + cláusula
-explícita inyectada por section_builder).
+Semántica real de los ecos (R-1 "mención ≠ desarrollo"): los ecos
+de la sección N son referencias cruzadas a temas YA desarrollados
+en secciones ANTERIORES. `validate_ecos_map` exige cobertura con
+esa semántica: cada slot de las secciones 1..10 debe aparecer como
+eco en alguna sección POSTERIOR a su dueña; la sección 1 va vacía.
+
+`propose_ecos_map` es FAIL-LOUD: si el LLM trunca su respuesta o
+no devuelve un JSON parseable con claves de sección, lanza
+`EcoMapProposalError` y NO persiste ningún borrador vacío.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import UTC
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -42,15 +47,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ecos_map import EcosMap, EcosMapOrigin, EcosMapStatus
-from app.modules.prompts.ecos_template import (
-    ECOS_SECTION_TEMPLATE,
-    all_template_slot_ids,
-    expected_owners,
-)
+from app.models.project import Project
+from app.modules.ai_gateway.models import DEFAULT_ECOS_MAP_MODEL
+from app.modules.prompts.ecos_template import ECOS_SECTION_TEMPLATE
 from app.modules.prompts.service import get_active_prompt
 
 if TYPE_CHECKING:
     from app.modules.ai_gateway.interfaces import AIGatewayClient
+
+
+def _strip_accents(text: str) -> str:
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
 def pathology_key_for(name: str) -> str:
@@ -63,13 +71,7 @@ def pathology_key_for(name: str) -> str:
     """
     if not name:
         return ""
-    import unicodedata as _u
-
-    nfkd = _u.normalize("NFKD", name)
-    without_accents = "".join(
-        c for c in nfkd if not _u.combining(c)
-    )
-    slug = re.sub(r"[^a-z0-9]+", "-", without_accents.lower()).strip("-")
+    slug = re.sub(r"[^a-z0-9]+", "-", _strip_accents(name).lower()).strip("-")
     return slug
 
 
@@ -88,46 +90,81 @@ def _coerce_ecos_list(value) -> list[str]:
     return []
 
 
+def _normalize_match_text(text: str) -> str:
+    """Minúsculas sin acentos, para matching robusto eco ↔ slot."""
+    return _strip_accents(text).lower()
+
+
+def _slot_matches(slot: dict, eco: str) -> bool:
+    eco_norm = _normalize_match_text(eco)
+    label_norm = _normalize_match_text(slot["label"])
+    slot_id_norm = _normalize_match_text(
+        slot["slot_id"].replace("_", " ")
+    )
+    return label_norm in eco_norm or slot_id_norm in eco_norm
+
+
 def validate_ecos_map(draft_sections: dict) -> tuple[bool, list[str]]:
     """
-    Valida que un borrador de ecos map cumple la restricción dura:
-    cada slot del template debe aparecer en los ecos de SU sección
-    dueña (exactamente una), y los ecos de cada sección deben
-    referenciar slots del template (no inventar temas).
+    Valida un borrador de ecos map contra la SEMÁNTICA REAL de los
+    ecos (referencias cruzadas hacia secciones ANTERIORES, R-1
+    "mención ≠ desarrollo"):
 
-    Returns (ok, problems). `problems` lista los slots faltantes
-    o referencias inválidas.
+    - R1: la sección 1 debe ir vacía (no hay secciones anteriores
+      que referenciar).
+    - Cobertura: cada slot de las secciones 1..10 debe aparecer
+      como eco en AL MENOS UNA sección POSTERIOR a su dueña. La
+      sección dueña lo DESARROLLA (no se referencia a sí misma);
+      las posteriores lo citan como eco. Los slots de la sección
+      11 están exentos: no hay secciones posteriores.
+    - R7: sin ecos duplicados dentro de una misma sección.
+
+    Returns (ok, problems). Los warnings NO bloquean el guardado
+    (el criterio del doctor manda), pero deben ser señales reales:
+    un problema reportado aquí indica un riesgo R-1 concreto
+    (una sección posterior podría re-desarrollar un tema ya
+    cubierto al no ver su eco).
     """
     problems: list[str] = []
-    owners = expected_owners()
-    seen_slots: set[str] = set()
 
-    for section_number, slots in ECOS_SECTION_TEMPLATE.items():
-        ecos = _coerce_ecos_list(
-            draft_sections.get(str(section_number))
-        )
-        # Busca keywords de cada slot en los ecos de la sección.
-        for slot in slots:
-            slot_id = slot["slot_id"]
-            label_lower = slot["label"].lower()
-            if any(
-                label_lower in eco.lower()
-                or slot_id.replace("_", " ") in eco.lower()
-                for eco in ecos
-            ):
-                seen_slots.add(slot_id)
+    ecos_by_section = {
+        n: _coerce_ecos_list(draft_sections.get(str(n)))
+        for n in range(1, 12)
+    }
 
-    template_ids = all_template_slot_ids()
-    missing = template_ids - seen_slots
-    for m in sorted(missing):
+    # R1: la sección 1 no tiene secciones anteriores → siempre [].
+    if ecos_by_section[1]:
         problems.append(
-            f"slot '{m}' no aparece como eco en su sección dueña "
-            f"({owners.get(m)})"
+            "la sección 1 debe ir vacía: no hay secciones "
+            "anteriores que referenciar (R1)"
         )
 
-    # Detecta referencias a temas no presentes en el template
-    # (heurística: extraer frases entre comas/puntos y comparar).
-    # Esta parte es conservadora para no rechazar demasiado.
+    # R7: duplicados exactos dentro de una misma sección.
+    for n, ecos in ecos_by_section.items():
+        normalized = [_normalize_match_text(e) for e in ecos]
+        if len(normalized) != len(set(normalized)):
+            problems.append(
+                f"la sección {n} tiene ecos duplicados (R7)"
+            )
+
+    # Cobertura: slot de la sección S (S < 11) debe aparecer como
+    # eco en alguna sección posterior (S+1 .. 11).
+    for section_number, slots in ECOS_SECTION_TEMPLATE.items():
+        if section_number >= 11:
+            continue
+        later_ecos = [
+            eco
+            for n in range(section_number + 1, 12)
+            for eco in ecos_by_section[n]
+        ]
+        for slot in slots:
+            if not any(_slot_matches(slot, eco) for eco in later_ecos):
+                problems.append(
+                    f"slot '{slot['slot_id']}' no aparece como eco "
+                    f"en ninguna sección posterior a su sección "
+                    f"dueña ({section_number})"
+                )
+
     return (len(problems) == 0, problems)
 
 
@@ -188,11 +225,54 @@ class EcoMapNotApprovedError(Exception):
     """No hay eco map aprobado para la patología; bloquear generación."""
 
 
+class EcoMapProposalError(Exception):
+    """
+    El LLM no produjo un borrador utilizable (respuesta truncada,
+    JSON no parseable o sin claves de sección). Se lanza en lugar
+    de persistir un borrador vacío (fail-loud, nunca fail-silent).
+    """
+
+
+def _has_section_keys(draft: dict) -> bool:
+    """True si el dict parseado contiene al menos una clave '1'..'11'."""
+    return isinstance(draft, dict) and any(
+        str(n) in draft for n in range(1, 12)
+    )
+
+
+async def find_project_for_pathology(
+    db: AsyncSession, pathology_key: str
+) -> Project | None:
+    """
+    Devuelve el proyecto más reciente cuya `pathology_key` (derivada
+    de su nombre) coincide; prefiere proyectos con `merged_content`
+    para que el propose manual sea grounded como el auto-propose.
+    None si ningún proyecto corresponde a esa patología.
+    """
+    if not pathology_key:
+        return None
+    result = await db.execute(
+        select(Project).order_by(Project.updated_at.desc())
+    )
+    candidates = [
+        p
+        for p in result.scalars().all()
+        if pathology_key_for(p.name) == pathology_key
+    ]
+    if not candidates:
+        return None
+    with_content = [
+        p for p in candidates if (p.merged_content or "").strip()
+    ]
+    return (with_content or candidates)[0]
+
+
 async def propose_ecos_map(
     db: AsyncSession,
     ai: AIGatewayClient,
     pathology_name: str,
     source_content: str | None = None,
+    model: str | None = None,
 ) -> EcosMap:
     """
     Genera un borrador de ecos map vía mini-prompt LLM. El
@@ -202,6 +282,12 @@ async def propose_ecos_map(
     Si se proporciona `source_content` (extracto de merged_content),
     el LLM priorizará ecos para temas realmente cubiertos por las
     fuentes documentales del proyecto ("grounded propose").
+
+    Raises:
+        EcoMapProposalError: si el LLM trunca la respuesta o no
+            devuelve un JSON parseable con claves de sección. En
+            ese caso NO se persiste nada (fail-loud).
+        RuntimeError: si el prompt autopopulate no está sembrado.
     """
     from app.config import settings
 
@@ -209,7 +295,7 @@ async def propose_ecos_map(
     if prompt is None:
         raise RuntimeError(
             "Prompt 'ecos_map_autopopulate' no encontrado en "
-            "prompt_templates. Aplica la migración 011 o 013."
+            "prompt_templates. Aplica las migraciones 011/013/014."
         )
 
     template_json = json.dumps(
@@ -253,15 +339,37 @@ async def propose_ecos_map(
         f"debe mencionar el slot_id o su label del template."
     )
 
+    model_id = model or DEFAULT_ECOS_MAP_MODEL
+
     result = await ai.generate(
         prompt=user_payload,
-        model="google/gemini-3.1-pro-preview",  # default
+        model=model_id,
         temperature=0.1,
         system_prompt=prompt.content,
-        max_tokens=8192,
+        # Margen amplio: Gemini 3.1 Pro consume parte del presupuesto
+        # de salida en reasoning tokens; 8k podía truncar el JSON.
+        max_tokens=16384,
     )
 
+    # FAIL-LOUD: una respuesta truncada o no parseable NUNCA se
+    # persiste como borrador vacío. Un mapa con sections={} parece
+    # "generado" en la UI pero no contiene nada revisable.
+    if result.finish_reason == "length":
+        raise EcoMapProposalError(
+            "El modelo truncó su respuesta (finish_reason='length') "
+            "antes de completar el JSON del ecos map. No se guardó "
+            "ningún borrador. Reintenta la generación."
+        )
+
     draft_sections = _parse_draft_json(result.content)
+    if not _has_section_keys(draft_sections):
+        raise EcoMapProposalError(
+            "El modelo no devolvió un JSON válido con claves de "
+            "sección ('1'..'11'). No se guardó ningún borrador "
+            "vacío. Respuesta (primeros 200 chars): "
+            f"{(result.content or '')[:200]!r}"
+        )
+
     ok, problems = validate_ecos_map(draft_sections)
     next_v = await _next_version(db, pathology_name)
     description = (
@@ -285,6 +393,7 @@ async def propose_ecos_map(
         ),  # SIEMPRE draft; aprobación es humana
         origin=EcosMapOrigin.AUTOPOPULATED,
         is_active=False,
+        model_used=model_id,
         description=description,
     )
     db.add(new_map)

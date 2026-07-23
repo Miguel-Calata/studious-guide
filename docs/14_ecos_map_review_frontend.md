@@ -115,9 +115,16 @@ Respuesta 200:
 ```json
 {
   "ecos_map": { ... },
-  "warnings": ["slot 'mecanismo_molecular' no aparece como eco..."]
+  "warnings": [
+    "slot 'mecanismo_molecular' no aparece como eco en ninguna sección posterior a su sección dueña (3)"
+  ]
 }
 ```
+
+Nota: los warnings siguen la semántica real de los ecos (v3): un
+slot se reporta cuando NINGUNA sección posterior a su dueña lo
+referencia como eco. El número entre paréntesis es la sección
+dueña del slot.
 
 409: `{"detail": "Solo se pueden editar borradores (estado actual: approved)"}`
 

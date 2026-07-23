@@ -81,6 +81,7 @@ async def regenerate_section_job(
 async def propose_ecos_map_job(
     ctx: dict,
     project_id: str,
+    model: str | None = None,
 ) -> dict:
     """
     Auto-propose de ecos map grounded en merged_content.
@@ -130,6 +131,7 @@ async def propose_ecos_map_job(
                 ai,
                 project.name,
                 source_content=project.merged_content,
+                model=model,
             )
             log.info(
                 "propose_ecos_map_job_completed",

@@ -28,3 +28,4 @@ AVAILABLE_MODELS: list[dict[str, str]] = [
 
 DEFAULT_EXTRACTION_MODEL = "google/gemini-3.1-pro-preview"
 DEFAULT_GENERATION_MODEL = "google/gemini-3.1-pro-preview"
+DEFAULT_ECOS_MAP_MODEL = "google/gemini-3.1-pro-preview"

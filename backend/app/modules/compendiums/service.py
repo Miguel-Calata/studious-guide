@@ -18,6 +18,39 @@ from app.modules.prompts.section_builder import DOSIFICATION_MAP, SECTION_CONFIG
 
 log = logging.getLogger(__name__)
 
+
+async def _enqueue_propose_ecos_job(
+    arq_pool,
+    project_id: str,
+    pathology_key: str,
+    model: str | None = None,
+) -> bool:
+    """
+    Encola `propose_ecos_map_job` y reporta si quedó REALMENTE
+    encolado. arq devuelve None cuando ya existe un job con el
+    mismo `_job_id` (dedup mientras el resultado previo siga en
+    Redis); en ese caso reintenta con un id único para no mentir
+    al caller con un "encolado" que no va a ejecutarse nunca.
+    """
+    from uuid import uuid4
+
+    job = await arq_pool.enqueue_job(
+        "propose_ecos_map_job",
+        project_id=project_id,
+        model=model,
+        _job_id=f"propose_ecos_map_{pathology_key}",
+    )
+    if job is None:
+        job = await arq_pool.enqueue_job(
+            "propose_ecos_map_job",
+            project_id=project_id,
+            model=model,
+            _job_id=(
+                f"propose_ecos_map_{pathology_key}_{uuid4().hex[:8]}"
+            ),
+        )
+    return job is not None
+
 MARCADOR_CONTINUACION = re.compile(r"\[CONTINÚA.*?\]", re.IGNORECASE | re.DOTALL)
 FIN_PARTE_MARKER = re.compile(r"\[Fin de la Parte[^\]]*\]", re.IGNORECASE | re.DOTALL)
 HIDE_ALL_ARTIFACT = re.compile(r"strongHIDE\s+ALL|HIDE\s+ALL", re.IGNORECASE)
@@ -101,17 +134,21 @@ async def merge_extractions(
         pending = await get_pending_draft(db, pathology_key)
         if active_map is None and pending is None:
             try:
-                await arq_pool.enqueue_job(
-                    "propose_ecos_map_job",
-                    project_id=str(project.id),
-                    _job_id=f"propose_ecos_map_{pathology_key}",
+                ecos_map_enqueued = await _enqueue_propose_ecos_job(
+                    arq_pool, str(project.id), pathology_key
                 )
-                ecos_map_enqueued = True
-                log.info(
-                    "ecos_map_auto_propose_enqueued",
-                    project_id=str(project.id),
-                    pathology_key=pathology_key,
-                )
+                if ecos_map_enqueued:
+                    log.info(
+                        "ecos_map_auto_propose_enqueued",
+                        project_id=str(project.id),
+                        pathology_key=pathology_key,
+                    )
+                else:
+                    log.warning(
+                        "ecos_map_auto_propose_enqueue_returned_none",
+                        project_id=str(project.id),
+                        pathology_key=pathology_key,
+                    )
             except Exception:
                 log.warning(
                     "ecos_map_auto_propose_enqueue_failed",
@@ -169,12 +206,11 @@ async def generate_sections(
                 ),
             )
         # Sin mapa ni borrador: fallback — encolar auto-propose
+        enqueued = False
         if arq_pool is not None:
             try:
-                await arq_pool.enqueue_job(
-                    "propose_ecos_map_job",
-                    project_id=str(project.id),
-                    _job_id=f"propose_ecos_map_{pathology_key}",
+                enqueued = await _enqueue_propose_ecos_job(
+                    arq_pool, str(project.id), pathology_key
                 )
             except Exception:
                 log.warning(
@@ -188,9 +224,10 @@ async def generate_sections(
                 f"No existe ecos_map aprobado para la patología "
                 f"'{project.name}' (key='{pathology_key}'). "
                 + (
-                    "Se ha generado un borrador en segundo plano; "
-                    "revísalo y apruébalo cuando esté listo."
-                    if arq_pool is not None
+                    "Se ha encolado la generación de un borrador en "
+                    "segundo plano; revísalo y apruébalo cuando esté "
+                    "listo."
+                    if enqueued
                     else "Genera un borrador con "
                     f"POST /api/v1/pathologies/{pathology_key}/"
                     f"ecos-map:propose y apruébalo antes de generar."

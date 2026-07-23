@@ -26,7 +26,9 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.prompts.ecos_service import (
     EcoMapNotEditableError,
     EcoMapNotFoundError,
+    EcoMapProposalError,
     approve_ecos_map,
+    find_project_for_pathology,
     get_active_ecos_map,
     get_pending_draft,
     propose_ecos_map,
@@ -34,6 +36,13 @@ from app.modules.prompts.ecos_service import (
 )
 
 router = APIRouter(tags=["Ecos Maps"])
+
+
+class EcosMapProposeRequest(BaseModel):
+    model: str | None = Field(
+        default=None,
+        description="OpenRouter model ID. None = default.",
+    )
 
 
 class EcosMapUpdateRequest(BaseModel):
@@ -59,17 +68,46 @@ class EcosMapUpdateResponse(BaseModel):
 )
 async def propose_eco_map(
     key: str,
+    body: EcosMapProposeRequest = EcosMapProposeRequest(),
     db: AsyncSession = Depends(get_db),  # noqa: B008
     _user=Depends(get_current_user),  # noqa: B008
 ) -> dict:
     """
-    Genera un borrador de ecos map para una patología nueva usando
-    el mini-prompt 'ecos_map_autopopulate'. El borrador queda en
+    Genera un borrador de ecos map para una patología usando el
+    mini-prompt 'ecos_map_autopopulate'. El borrador queda en
     estado `draft`; requiere aprobación humana explícita.
+
+    Si existe un proyecto con esta pathology_key, el propose es
+    GROUNDED: usa el nombre real del proyecto y su merged_content
+    (igual que el auto-propose tras merge). Si no existe proyecto
+    (mapa preparado antes de crearlo), cae al nombre derivado de
+    la key sin contenido fuente.
     """
-    pathology_name = key.replace("-", " ").title()
+    project = await find_project_for_pathology(db, key)
+    if project is not None:
+        pathology_name = project.name
+        source_content = project.merged_content
+    else:
+        pathology_name = key.replace("-", " ").title()
+        source_content = None
+
     ai = OpenRouterClient()
-    eco_map = await propose_ecos_map(db, ai, pathology_name)
+    try:
+        eco_map = await propose_ecos_map(
+            db, ai, pathology_name, source_content=source_content,
+            model=body.model,
+        )
+    except EcoMapProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from None
+    except RuntimeError as exc:
+        # Prompt autopopulate no sembrado (error de configuración)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from None
     return _serialize(eco_map)
 
 
@@ -179,6 +217,7 @@ def _serialize(eco_map: EcosMap) -> dict:
         "is_active": eco_map.is_active,
         "sections": eco_map.sections,
         "description": eco_map.description,
+        "model_used": eco_map.model_used,
         "approved_by": eco_map.approved_by,
         "approved_at": (
             eco_map.approved_at.isoformat() if eco_map.approved_at else None

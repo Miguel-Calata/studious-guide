@@ -3,9 +3,14 @@ Tests de la Tarea 3 — MAPA_ECOS híbrido.
 
 Cubre:
   - `pathology_key_for`: normalización
-  - `validate_ecos_map`: restricción dura de cobertura completa
+  - `validate_ecos_map`: cobertura con semántica backward real
+    (slot de la sección S debe aparecer como eco en alguna sección
+    posterior; sección 1 vacía; sin duplicados)
   - `get_active_ecos_map` / `require_approved_map`
   - `propose_ecos_map` genera un borrador (mock del cliente LLM)
+  - `propose_ecos_map` FAIL-LOUD: respuesta truncada, basura o
+    JSON sin claves de sección → EcoMapProposalError, sin persistir
+  - `find_project_for_pathology`: grounding del propose manual
   - `approve_ecos_map` desactiva versiones previas
   - Aceptación: auto-poblado sobre HTN produce un draft revisable
   - Aceptación: el mapa AKI sembrado está intacto
@@ -28,7 +33,9 @@ from app.modules.ai_gateway.interfaces import AIResult
 from app.modules.auth.service import hash_password
 from app.modules.prompts.ecos_service import (
     EcoMapNotApprovedError,
+    EcoMapProposalError,
     approve_ecos_map,
+    find_project_for_pathology,
     get_active_ecos_map,
     get_ecos_for_section,
     pathology_key_for,
@@ -36,10 +43,7 @@ from app.modules.prompts.ecos_service import (
     require_approved_map,
     validate_ecos_map,
 )
-from app.modules.prompts.ecos_template import (
-    ECOS_SECTION_TEMPLATE,
-    all_template_slot_ids,
-)
+from app.modules.prompts.ecos_template import ECOS_SECTION_TEMPLATE
 
 # ── pathology_key_for ───────────────────────────────────────────────
 
@@ -54,37 +58,68 @@ def test_pathology_key_for_lowercase_slug():
 # ── validate_ecos_map ────────────────────────────────────────────────
 
 
-def _full_aki_draft() -> dict:
-    """Construye un draft que cubre todos los slots del template."""
-    draft: dict[str, list[str]] = {}
+def _valid_draft() -> dict:
+    """
+    Draft válido con la semántica real de los ecos (backward):
+    sección 1 vacía; cada slot de las secciones 1..10 aparece como
+    eco (mencionando su label) en la sección inmediatamente
+    posterior a su dueña. Los slots de la 11 no pueden tener ecos.
+    """
+    draft: dict[str, list[str]] = {str(n): [] for n in range(1, 12)}
     for section_number, slots in ECOS_SECTION_TEMPLATE.items():
-        draft[str(section_number)] = [
-            f"({s['label']} → ver Sección dueña)" for s in slots
-        ]
+        if section_number >= 11:
+            continue
+        target = str(section_number + 1)
+        for s in slots:
+            draft[target].append(
+                f"{s['label']} (→ ver Sección {section_number})"
+            )
     return draft
 
 
 def test_validate_ecos_map_full_coverage_ok():
-    draft = _full_aki_draft()
+    draft = _valid_draft()
     ok, problems = validate_ecos_map(draft)
     assert ok is True
     assert problems == []
 
 
 def test_validate_ecos_map_missing_slot_reports_problem():
-    draft = _full_aki_draft()
-    # Quita una entrada del slot 'criterios_diagnosticos' (sección 2)
-    draft["2"] = [e for e in draft["2"] if "Criterios diagnósticos" not in e]
+    draft = _valid_draft()
+    # El eco de 'criterios_diagnosticos' (dueño: sección 2) vive en la 3
+    draft["3"] = [e for e in draft["3"] if "Criterios diagnósticos" not in e]
     ok, problems = validate_ecos_map(draft)
     assert ok is False
     assert any("criterios_diagnosticos" in p for p in problems)
 
 
+def test_validate_ecos_map_section1_must_be_empty():
+    draft = _valid_draft()
+    draft["1"] = ["Eco indebido: la sección 1 no referencia a nadie"]
+    ok, problems = validate_ecos_map(draft)
+    assert ok is False
+    assert any("sección 1" in p for p in problems)
+
+
+def test_validate_ecos_map_rejects_duplicate_ecos():
+    draft = _valid_draft()
+    draft["4"].append(draft["4"][0])
+    ok, problems = validate_ecos_map(draft)
+    assert ok is False
+    assert any("duplicados" in p for p in problems)
+
+
 def test_validate_ecos_map_handles_non_dict_input():
     ok, problems = validate_ecos_map({})
-    # No hay cobertura → lista todos los problemas
+    # Sin cobertura: un problema por cada slot de las secciones
+    # 1..10 (la 11 está exenta, no tiene secciones posteriores)
+    expected = sum(
+        len(slots)
+        for n, slots in ECOS_SECTION_TEMPLATE.items()
+        if n < 11
+    )
     assert ok is False
-    assert len(problems) == len(all_template_slot_ids())
+    assert len(problems) == expected
 
 
 # ── get_ecos_for_section ─────────────────────────────────────────────
@@ -149,21 +184,7 @@ async def test_propose_ecos_map_creates_draft_for_new_pathology(
     # Re-usar el sembrado por la migración. Solo asegurarnos.
     ai_mock = MagicMock()
     fake_ai_result = AIResult(
-        content=json.dumps(
-            {
-                "1": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[1]],
-                "2": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[2]],
-                "3": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[3]],
-                "4": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[4]],
-                "5": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[5]],
-                "6": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[6]],
-                "7": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[7]],
-                "8": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[8]],
-                "9": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[9]],
-                "10": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[10]],
-                "11": [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[11]],
-            }
-        ),
+        content=json.dumps(_valid_draft()),
         model="google/gemini-3.1-pro-preview",
         input_tokens=2000,
         output_tokens=1500,
@@ -182,6 +203,8 @@ async def test_propose_ecos_map_creates_draft_for_new_pathology(
     assert eco_map.origin == EcosMapOrigin.AUTOPOPULATED
     assert eco_map.pathology_key == "hipertension-arterial"
     assert eco_map.version == 1
+    # model_used debe reflejar el default
+    assert eco_map.model_used == "google/gemini-3.1-pro-preview"
     # Cobertura: todos los slots del template representados
     ok, problems = validate_ecos_map(eco_map.sections)
     assert ok is True, f"problemas: {problems}"
@@ -262,9 +285,7 @@ async def test_aki_seed_map_unchanged_by_autopopulate(
     ai_mock = MagicMock()
     ai_mock.generate = AsyncMock(
         return_value=AIResult(
-            content=json.dumps(
-                {str(n): [s["label"] for s in ECOS_SECTION_TEMPLATE[n]] for n in range(1, 12)}
-            ),
+            content=json.dumps(_valid_draft()),
             model="google/gemini-3.1-pro-preview",
             input_tokens=10,
             output_tokens=10,
@@ -419,12 +440,7 @@ async def test_propose_ecos_map_with_source_content(
     """
     ai_mock = MagicMock()
     fake_result = AIResult(
-        content=json.dumps(
-            {
-                str(n): [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[n]]
-                for n in range(1, 12)
-            }
-        ),
+        content=json.dumps(_valid_draft()),
         model="google/gemini-3.1-pro-preview",
         input_tokens=2000,
         output_tokens=1500,
@@ -454,6 +470,7 @@ async def test_propose_ecos_map_with_source_content(
 
     assert eco_map.status == EcosMapStatus.DRAFT
     assert eco_map.origin == EcosMapOrigin.AUTOPOPULATED
+    assert eco_map.model_used == "google/gemini-3.1-pro-preview"
 
 
 @pytest.mark.asyncio
@@ -465,12 +482,7 @@ async def test_propose_ecos_map_without_source_content(
     """
     ai_mock = MagicMock()
     fake_result = AIResult(
-        content=json.dumps(
-            {
-                str(n): [f"({s['label']})" for s in ECOS_SECTION_TEMPLATE[n]]
-                for n in range(1, 12)
-            }
-        ),
+        content=json.dumps(_valid_draft()),
         model="google/gemini-3.1-pro-preview",
         input_tokens=1000,
         output_tokens=1000,
@@ -487,6 +499,63 @@ async def test_propose_ecos_map_without_source_content(
     prompt_sent = call_kwargs.kwargs.get("prompt", "")
     assert "CONTENIDO FUENTE" not in prompt_sent
     assert eco_map.status == EcosMapStatus.DRAFT
+    assert eco_map.model_used == "google/gemini-3.1-pro-preview"
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_uses_custom_model(
+    client, db_session
+):
+    """
+    Propose con model custom pasa el model_id a generate() y lo
+    persiste en model_used.
+    """
+    ai_mock = MagicMock()
+    fake_result = AIResult(
+        content=json.dumps(_valid_draft()),
+        model="anthropic/claude-sonnet-5",
+        input_tokens=1000,
+        output_tokens=1000,
+        cost_usd=0.03,
+        finish_reason="stop",
+    )
+    ai_mock.generate = AsyncMock(return_value=fake_result)
+
+    eco_map = await propose_ecos_map(
+        db_session, ai_mock, "EPOC",
+        model="anthropic/claude-sonnet-5",
+    )
+
+    call_kwargs = ai_mock.generate.call_args
+    assert call_kwargs.kwargs.get("model") == "anthropic/claude-sonnet-5"
+    assert eco_map.model_used == "anthropic/claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_uses_default_model_when_none(
+    client, db_session
+):
+    """
+    Propose sin model explícito usa DEFAULT_ECOS_MAP_MODEL.
+    """
+    ai_mock = MagicMock()
+    fake_result = AIResult(
+        content=json.dumps(_valid_draft()),
+        model="google/gemini-3.1-pro-preview",
+        input_tokens=1000,
+        output_tokens=1000,
+        cost_usd=0.03,
+        finish_reason="stop",
+    )
+    ai_mock.generate = AsyncMock(return_value=fake_result)
+
+    eco_map = await propose_ecos_map(
+        db_session, ai_mock, "EPOC"
+    )
+
+    call_kwargs = ai_mock.generate.call_args
+    assert call_kwargs.kwargs.get("model") == "google/gemini-3.1-pro-preview"
+    assert eco_map.model_used == "google/gemini-3.1-pro-preview"
 
 
 # ── update_ecos_map_draft ────────────────────────────────────────
@@ -501,7 +570,7 @@ async def test_update_ecos_map_draft_updates_sections(
         pathology_key="edit-test",
         pathology_name="Edit Test",
         version=1,
-        sections=_full_aki_draft(),
+        sections=_valid_draft(),
         status=EcosMapStatus.DRAFT,
         is_active=False,
     )
@@ -510,7 +579,7 @@ async def test_update_ecos_map_draft_updates_sections(
 
     from app.modules.prompts.ecos_service import update_ecos_map_draft
 
-    new_sections = _full_aki_draft()
+    new_sections = _valid_draft()
     new_sections["2"] = ["custom eco for section 2"]
 
     updated, problems = await update_ecos_map_draft(
@@ -532,7 +601,7 @@ async def test_update_ecos_map_draft_rejects_approved(
         pathology_key="no-edit-test",
         pathology_name="No Edit",
         version=1,
-        sections=_full_aki_draft(),
+        sections=_valid_draft(),
         status=EcosMapStatus.APPROVED,
         is_active=True,
     )
@@ -546,7 +615,7 @@ async def test_update_ecos_map_draft_rejects_approved(
 
     with pytest.raises(EcoMapNotEditableError):
         await update_ecos_map_draft(
-            db_session, eco_map.id, _full_aki_draft()
+            db_session, eco_map.id, _valid_draft()
         )
 
 
@@ -560,7 +629,7 @@ async def test_get_pending_draft_returns_latest(client, db_session):
         pathology_key="pending-test",
         pathology_name="Pending",
         version=1,
-        sections=_full_aki_draft(),
+        sections=_valid_draft(),
         status=EcosMapStatus.DRAFT,
         is_active=False,
     )
@@ -569,7 +638,7 @@ async def test_get_pending_draft_returns_latest(client, db_session):
         pathology_key="pending-test",
         pathology_name="Pending",
         version=2,
-        sections=_full_aki_draft(),
+        sections=_valid_draft(),
         status=EcosMapStatus.DRAFT,
         is_active=False,
     )
@@ -592,7 +661,7 @@ async def test_get_pending_draft_returns_none_when_only_approved(
         pathology_key="only-approved-test",
         pathology_name="Only Approved",
         version=1,
-        sections=_full_aki_draft(),
+        sections=_valid_draft(),
         status=EcosMapStatus.APPROVED,
         is_active=True,
     )
@@ -639,7 +708,7 @@ async def test_generate_sections_409_with_pending_draft(
         pathology_key="draft-pending-msg",
         pathology_name="Draft Pending Msg",
         version=1,
-        sections=_full_aki_draft(),
+        sections=_valid_draft(),
         status=EcosMapStatus.DRAFT,
         is_active=False,
     )
@@ -691,14 +760,152 @@ async def test_generate_sections_409_without_any_map(
 
 
 @pytest.mark.asyncio
-async def test_autopopulate_prompt_v2_exists(client, db_session):
+async def test_autopopulate_prompt_v3_exists(client, db_session):
     """
-    La migración 013 siembra la v2 de ecos_map_autopopulate como
-    activa (v1 queda inactiva).
+    La migración 014 siembra la v3 de ecos_map_autopopulate como
+    activa (v1 y v2 quedan inactivas). La v3 corrige la semántica
+    de los ecos a backward (referencia a tema YA desarrollado).
     """
     from app.modules.prompts.ecos_service import get_active_prompt
 
     prompt = await get_active_prompt(db_session, "ecos_map_autopopulate")
-    assert prompt.version == 2
-    assert "R1." in prompt.content  # v2 tiene reglas R1-R9
+    assert prompt.version == 3
+    assert "R1." in prompt.content  # v3 mantiene reglas R1-R9
     assert "MAPA DE ECOS" in prompt.content
+    assert "YA FUE DESARROLLADO" in prompt.content  # semántica backward
+
+
+# ── propose_ecos_map FAIL-LOUD ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_garbage_response_raises_and_persists_nothing(
+    client, db_session
+):
+    """
+    Fail-loud: si el LLM devuelve texto no parseable, se lanza
+    EcoMapProposalError y NO se persiste ningún borrador vacío
+    (antes se guardaba sections={} — el mapa "aparecía vacío").
+    """
+    ai_mock = MagicMock()
+    ai_mock.generate = AsyncMock(
+        return_value=AIResult(
+            content="Lo siento, no puedo generar ese mapa de ecos.",
+            model="google/gemini-3.1-pro-preview",
+            input_tokens=10,
+            output_tokens=10,
+            cost_usd=0.0,
+            finish_reason="stop",
+        )
+    )
+
+    with pytest.raises(EcoMapProposalError):
+        await propose_ecos_map(db_session, ai_mock, "Patología Garbage")
+
+    result = await db_session.execute(
+        select(EcosMap).where(
+            EcosMap.pathology_key == "patologia-garbage"
+        )
+    )
+    assert result.scalars().first() is None
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_truncated_response_raises(
+    client, db_session
+):
+    """
+    finish_reason='length' (JSON truncado, p.ej. por reasoning
+    tokens consumiendo max_tokens) → error explícito, nunca un
+    borrador a medias.
+    """
+    ai_mock = MagicMock()
+    ai_mock.generate = AsyncMock(
+        return_value=AIResult(
+            content='{"1": [], "2": ["eco incompleto',
+            model="google/gemini-3.1-pro-preview",
+            input_tokens=10,
+            output_tokens=16384,
+            cost_usd=0.0,
+            finish_reason="length",
+        )
+    )
+
+    with pytest.raises(EcoMapProposalError, match="trunc"):
+        await propose_ecos_map(db_session, ai_mock, "Patología Truncada")
+
+
+@pytest.mark.asyncio
+async def test_propose_ecos_map_wrapped_json_raises(
+    client, db_session
+):
+    """
+    JSON parseable pero sin claves de sección ('1'..'11') — p.ej.
+    el modelo envuelve el mapa en {"sections": {...}} — también es
+    error: persistirlo produciría un mapa que la UI muestra vacío.
+    """
+    ai_mock = MagicMock()
+    ai_mock.generate = AsyncMock(
+        return_value=AIResult(
+            content=json.dumps({"sections": _valid_draft()}),
+            model="google/gemini-3.1-pro-preview",
+            input_tokens=10,
+            output_tokens=10,
+            cost_usd=0.0,
+            finish_reason="stop",
+        )
+    )
+
+    with pytest.raises(EcoMapProposalError):
+        await propose_ecos_map(db_session, ai_mock, "Patología Wrapped")
+
+    result = await db_session.execute(
+        select(EcosMap).where(
+            EcosMap.pathology_key == "patologia-wrapped"
+        )
+    )
+    assert result.scalars().first() is None
+
+
+# ── find_project_for_pathology (grounding del propose manual) ──
+
+
+@pytest.mark.asyncio
+async def test_find_project_for_pathology_prefers_merged_content(
+    client, db_session
+):
+    user = User(
+        email="find-proj@test.com",
+        password_hash=hash_password("X"),
+        full_name="FindProj",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    p_empty = Project(
+        user_id=user.id,
+        name="Insuficiencia Renal Aguda",
+        slug="ira-empty",
+        status=ProjectStatus.DRAFT,
+        merged_content="",
+    )
+    p_merged = Project(
+        user_id=user.id,
+        name="Insuficiencia Renal Aguda!",
+        slug="ira-merged",
+        status=ProjectStatus.REVIEW,
+        merged_content="contenido fusionado de guías",
+    )
+    db_session.add_all([p_empty, p_merged])
+    await db_session.commit()
+
+    found = await find_project_for_pathology(
+        db_session, "insuficiencia-renal-aguda"
+    )
+    assert found is not None
+    assert found.id == p_merged.id
+
+    assert (
+        await find_project_for_pathology(db_session, "no-existe")
+        is None
+    )

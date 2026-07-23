@@ -97,6 +97,10 @@ class EcosMap(UUIDMixin, TimestampMixin, Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    model_used: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
     description: Mapped[str | None] = mapped_column(
         String(1000),
         nullable=True,

@@ -113,12 +113,25 @@ pipeline consume.
 
 **Flujo manual (sigue disponible):**
 1. `POST /api/v1/pathologies/{key}/ecos-map:propose` — genera
-   borrador (draft, no activo). Acepta `source_content` opcional
-   para grounded propose.
+   borrador (draft, no activo). Si existe un proyecto con esa
+   `pathology_key`, el endpoint lo resuelve automáticamente y el
+   propose es GROUNDED (nombre real + `merged_content` del
+   proyecto, igual que el auto-propose). Si no existe proyecto,
+   cae al nombre derivado de la key sin contenido fuente.
 2. `PUT /api/v1/ecos-maps/{id}` — edita secciones/description
    del borrador (draft-only). Devuelve warnings de cobertura.
 3. `POST /api/v1/ecos-maps/{id}/approve` — marca approved,
    is_active=true, desactiva versión anterior.
+
+**Fail-loud (v3, fix 2026-07-22):** `propose_ecos_map` NUNCA
+persiste un borrador vacío. Si el LLM trunca su respuesta
+(`finish_reason='length'`) o no devuelve un JSON parseable con
+claves de sección (`'1'..'11'`), lanza `EcoMapProposalError` y el
+endpoint responde 502 con el detalle. Antes, una respuesta
+defectuosa se guardaba silenciosamente como `sections={}` y la
+UI mostraba "un mapa vacío". `max_tokens` del propose subió de
+8192 a 16384 (Gemini 3.1 Pro consume parte del presupuesto de
+salida en reasoning tokens).
 
 **Fix de wiring (v2 del prompt):**
 El system prompt enviado al LLM para generar el mapa era
@@ -129,14 +142,28 @@ contenido de `ecos_map_autopopulate` v2 (reglas R1-R9) se envía
 como system prompt. La v2 incluye reglas más estrictas y soporte
 para contenido fuente grounded.
 
-**Validación de cobertura:** `validate_ecos_map(draft)` garantiza
-que cada slot del `ECOS_SECTION_TEMPLATE` aparezca en los ecos
-de su sección dueña. Los warnings se reportan pero no bloquean
-el guardado (el criterio del doctor manda).
+**Semántica de los ecos (v3 del prompt, fix 2026-07-22):**
+un "eco" es una referencia cruzada de UNA LÍNEA a un tema YA
+desarrollado en una sección ANTERIOR (R-1 "mención ≠ desarrollo";
+la sección DUEÑA desarrolla, las posteriores referencian). La v2
+mezclaba esa semántica con una definición forward y una R6 que
+exigía el eco en la propia dueña; la v3 (migración 014) la hace
+consistente. La sección 1 siempre va vacía (R1).
+
+**Validación de cobertura:** `validate_ecos_map(draft)` exige la
+misma semántica: cada slot de las secciones 1..10 debe aparecer
+como eco en AL MENOS UNA sección POSTERIOR a su dueña; la sección
+1 debe ir vacía; sin ecos duplicados por sección. Los slots de la
+sección 11 están exentos (no hay secciones posteriores). Los
+warnings se reportan pero no bloquean el guardado (el criterio
+del doctor manda). Nota: el seed AKI (legacy, pre-template) puede
+reportar warnings bajo esta validación — es un mapa aprobado, la
+validación solo aplica a borradores.
 
 **Seed AKI:** la migración 011 siembra el mapa AKI v1. La
-migración 013 siembra la v2 del prompt autopopulate. Cualquier
-patología nueva recibe auto-propose tras merge.
+migración 013 siembra la v2 del prompt autopopulate y la 014 la
+v3 (activa). Cualquier patología nueva recibe auto-propose tras
+merge.
 
 ---
 

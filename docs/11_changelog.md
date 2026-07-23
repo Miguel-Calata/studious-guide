@@ -4,6 +4,57 @@ Registro cronológico de decisiones arquitectónicas, cambios de diseño y desvi
 
 ---
 
+## 2026-07-22 — Fix creación de ecos maps: fail-loud, grounding y semántica real
+
+### Alcance
+Los ecos maps "aparecían vacíos" y el auto-propose no producía borradores. Auditoría del sistema completo de creación de ecos maps: la BD no contenía ningún mapa `autopopulated` (solo el seed AKI y 5 mapas debug vacíos insertados a mano, borrados), y el código tenía 4 defectos que garantizaban el síntoma. Se corrigen la raíz (fail-silent), el grounding, la validación y el prompt.
+
+### Hallazgos de la auditoría (evidencia en BD/logs)
+
+1. `_parse_draft_json` devolvía `{}` ante respuestas truncadas/no parseables y el borrador **se persistía igualmente con `sections={}`** → "mapa vacío" con apariencia de éxito.
+2. El endpoint manual `POST .../ecos-map:propose` NO pasaba `source_content` → ecos desde conocimiento del modelo, no de las guías del proyecto.
+3. `validate_ecos_map` exigía cada slot como eco **en su propia sección dueña** — lo contrario de la semántica real (el dueño desarrolla; los ecos viven en secciones posteriores). El propio seed AKI no pasaba su validación.
+4. El prompt v2 era internamente contradictorio (DEFINICIÓN forward vs R1/R6/seed backward) → salidas inconsistentes del LLM.
+5. `enqueue_job` con `_job_id` fijo devuelve `None` en dedup y el código reportaba `ecos_map_enqueued=True` igualmente.
+
+### Decisiones
+
+| # | Decisión | Justificación | Alternativas |
+|---|----------|---------------|-------------|
+| F-35 | **Fail-loud en `propose_ecos_map`** | Respuesta truncada (`finish_reason='length'`) o JSON sin claves de sección → `EcoMapProposalError`, nada se persiste; el endpoint responde 502 con el detalle. Un error visible es mejor que un mapa vacío silencioso (Pilar #1) | Guardar con warnings (rechazado: produce mapas vacíos "válidos") |
+| F-36 | **`max_tokens` 8192 → 16384 en propose** | Gemini 3.1 Pro consume parte del presupuesto de salida en reasoning tokens; 8k podía truncar el JSON | Desactivar reasoning vía extra_body (riesgo de parámetro no soportado por el preview) |
+| F-37 | **Endpoint propose grounded vía `find_project_for_pathology`** | Resuelve el proyecto por `pathology_key` y usa su nombre real + `merged_content` (paridad con el auto-propose); fallback al nombre derivado de la key si no hay proyecto | Pasar `project_id` al endpoint (rompe el contrato actual `/pathologies/{key}/`) |
+| F-38 | **Validador con semántica backward** | Slot de la sección S (S<11) debe aparecer como eco en ≥1 sección posterior; sección 1 vacía (R1); sin duplicados (R7); slots de la 11 exentos | Exigir eco en la dueña (contradice R-1), no validar nada |
+| F-39 | **Prompt v3 (migración 014)** | DEFINICIÓN y R6 alineadas a la semántica backward real; elimina la contradicción interna de la v2 | Editar v2 in-place (rompe versionado de prompts) |
+| F-40 | **Encolado honesto** | `_enqueue_propose_ecos_job` comprueba el retorno de `enqueue_job`; si es `None` (dedup) reintenta con `_job_id` único y reporta `ecos_map_enqueued` real | Mantener el reporte optimista (mentira silenciosa) |
+
+### Migraciones
+
+- `014_ecos_autopopulate_v3.py` — v3 del prompt `ecos_map_autopopulate`: semántica backward consistente (eco = referencia a tema YA desarrollado en sección anterior); R6 exige el eco en secciones posteriores a la dueña. Desactiva v2.
+
+### Archivos modificados
+
+**Backend:**
+- `app/modules/prompts/ecos_service.py` — fail-loud en `propose_ecos_map` (+`EcoMapProposalError`, `_has_section_keys`, `max_tokens` 16384); `validate_ecos_map` reescrito con semántica backward (R1 sección 1 vacía, cobertura en secciones posteriores, R7 duplicados); matching sin acentos (`_normalize_match_text`); +`find_project_for_pathology`
+- `app/modules/prompts/ecos_router.py` — propose grounded (resuelve proyecto, pasa `merged_content` + nombre real); 502 con detalle ante `EcoMapProposalError`
+- `app/modules/compendiums/service.py` — +`_enqueue_propose_ecos_job` (retorno comprobado, `_job_id` único en reintento); 409 honesto según encolado real
+
+**Limpieza de datos (local):** borrados los 5 mapas debug vacíos (`eco-debug*`, `sections={}`, insertados a mano el 2026-07-21) que eran los que se veían "vacíos" en la UI.
+
+### Tests
+
+- 6 tests nuevos en `tests/test_ecos_map.py`: fail-loud (basura no parseable, truncado `length`, JSON envuelto sin claves de sección — los tres sin persistir nada), `find_project_for_pathology` (prefiere merged_content), sección 1 no vacía, duplicados R7.
+- Tests actualizados a la semántica backward (fixture `_valid_draft`, prompt v3).
+- 207 tests totales pasando; ruff limpio en los archivos tocados.
+
+### Notas
+
+- La aprobación sigue siendo 100% humana y el gate 409 intacto.
+- El seed AKI puede reportar warnings bajo el nuevo validador (es legacy pre-template); no afecta a runtime (la validación solo aplica a borradores).
+- Si en producción (Coolify) existen mapas vacíos del mismo origen, aplicar la misma limpieza: `DELETE FROM ecos_maps WHERE sections::jsonb = '{}'::jsonb;` y redesplegar con la migración 014.
+
+---
+
 ## 2026-07-21 — Auto-propose de ecos map + edición de borrador
 
 ### Alcance
